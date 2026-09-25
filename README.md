@@ -1,36 +1,43 @@
-# Roo Rescue
+# Gumleaf Dash
 
-A 3D endless-runner across Australia. You play a kangaroo hopping through four stages:
+A 3D endless runner across Australia. You play a kangaroo (or a quokka or koala, once unlocked) hopping through four stages that loop and keep getting faster:
 
-1. **Uluru Outback**: red dirt, termite mounds, Uluru and Kata Tjuta on the horizon
-2. **Blue Mountains**: gum forest and the Three Sisters
-3. **Sydney Harbour**: sailboats, green-and-gold ferries, the Opera House, and a run under the Harbour Bridge
-4. **Reef Coast**: beaches, palms, surfboards, a lighthouse and reef bommies
-
-Rescue koalas sitting on the track, collect gum leaves, hop over logs, rocks and eskies, and dodge the tall stuff. After Reef Coast the stages loop and the game keeps getting faster.
+1. **Red Desert** at golden hour: mesas, spinifex, windmills, hot-air balloons
+2. **Misty Ranges**: gum forest, tree ferns, a waterfall and a rainbow
+3. **Harbour City** at night: city lights, fireworks, a big wheel, and a run under a suspension bridge
+4. **Coral Coast**: beach, palms, dolphins, a lighthouse and a breaching whale
 
 ## Play
 
-Open `index.html` in any modern browser. It's one file with no build step. Three.js loads from cdnjs.
+Open `index.html` in a modern browser. It's a single file with no build step. Three.js r160 loads from jsDelivr.
 
 | Action | Keyboard | Touch |
 | --- | --- | --- |
 | Change lane | ← → or A D | Swipe left or right |
-| Hop | ↑, W or Space | Tap or swipe up |
-| Drop fast | ↓ or S | Swipe down |
+| Hop (double hop with Super hop) | ↑, W or Space | Tap or swipe up |
+| Duck / drop fast | ↓ or S | Swipe down |
 | Pause / sound | P / M | Buttons in the bottom-right corner |
+
+## What's in it
+
+- **Three kinds of obstacle**: hop over low ones (logs, rocks, coolers, crocodiles), switch lanes around tall ones, and duck under overhead ones (rock arches, branches, bunting, beach nets).
+- **Moving hazards**: charging emus, wombats crossing the track, and magpies that swoop at whichever lane you're in (a red ring on the ground warns you).
+- **Koala rescues**: rescued koalas ride on your back, up to three at a time.
+- **Power-ups**: the bush hat is a shield, the gumnut magnet pulls in leaves, and Super hop gives high, floaty double jumps.
+- **Leaf combo**: collect leaves quickly to raise the multiplier up to x6. Golden leaves are worth 10.
+- **Missions and ranks**: three missions are active at a time. Every 3 you complete raises your Ranger rank, which is a permanent score multiplier.
+- **Skins**: Grey Roo, Quinn the Quokka, Kip the Koala, Starlight Roo and Golden Roo.
 
 ## Built-in money features
 
-- **Gum leaves** are a soft currency, saved in the browser (`localStorage`).
-- **Skins shop**: Grey Roo (150), Kip the Koala (400), Golden Roo (1200). This is where in-app purchases or leaf packs would plug in.
-- **Second chance**: one revive per run. `requestRevive()` in `index.html` is the hook for a rewarded video ad. Call `revive()` only after the ad reports it was watched.
-- **Akubra hat power-up**: absorbs one hit.
+- **Gum leaves** are a soft currency (saved in `localStorage`) spent on skins and revives. Selling leaf packs as in-app purchases fits here.
+- **Second chance** (free, once per run) is the rewarded-ad slot. `requestFreeRevive()` in `index.html` is the hook: show the ad, then call `revive()` only if it was watched.
+- **Leaf revive** costs 75 leaves, doubling each time in a run. It creates demand for leaves.
+- **Missions and ranks** give players a reason to come back.
 
-## Ways to earn from it
+## Names, landmarks and licences
 
-- **Web game portals** (CrazyGames, Poki, GameDistribution): upload the HTML5 build and integrate their SDK for ads (rewarded video for the revive, midroll between runs). They share ad revenue with you. Each portal has its own review and SDK requirements.
-- **itch.io**: free with pay-what-you-want, or paid.
-- **Mobile app**: wrap it with Capacitor or Cordova, add AdMob rewarded ads and in-app purchases for leaf packs and skins, then publish to Google Play and the App Store.
-
-Before selling it commercially, check trademark rules on landmark names and images (the Sydney Opera House, for example, is a registered trademark), and change names or designs where needed.
+- Every place is generic and fictional. The game has no Uluru, no Opera House, and no named bridge, and no stage is named after a real site.
+- There are no brand names: "cooler" rather than a brand of cool box, "bush hat" rather than a hat brand, and the ferries use generic colours.
+- A web search for "Gumleaf Dash" turned up no existing game. That is not a trademark clearance, so search the trademark registers (IP Australia, USPTO, EUIPO) before publishing commercially.
+- Three.js is MIT-licensed. The Lilita One and Nunito fonts are under the SIL Open Font License. All models, textures, sounds and music are generated in code for this game.
