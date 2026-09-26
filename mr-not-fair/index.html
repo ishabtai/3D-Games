@@ -1,0 +1,1409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#2b211c">
+<title>Mr. Not Fair: The Biscuit Tin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#2b211c;overflow:hidden;overscroll-behavior:none}
+body{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
+canvas{position:fixed;inset:0;display:block;cursor:pointer}
+#rot{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#f6ead0;z-index:5}
+#rot svg{width:120px;height:120px;animation:r 2s ease-in-out infinite}
+@keyframes r{0%,30%{transform:rotate(0)}60%,100%{transform:rotate(-90deg)}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="rot"><svg viewBox="0 0 100 100" aria-label="Turn your device sideways"><rect x="30" y="10" width="40" height="80" rx="8" fill="#f6b820" stroke="#2b2220" stroke-width="5"/><circle cx="50" cy="80" r="4" fill="#2b2220"/></svg></div>
+<script>
+'use strict';
+/* Mr. Not Fair: The Biscuit Tin
+   A no-reading episode for ages 4-7. The player makes a rule with picture cards,
+   the world follows it far too literally, then Mr. Not Fair notices what he missed. */
+
+const W = 1600, H = 900, INK = '#2b2220';
+const FONT = '"Patrick Hand","Comic Sans MS","Chalkboard SE",cursive';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let dpr = 1, scale = 1, offX = 0, offY = 0;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const iw = innerWidth, ih = innerHeight;
+  scale = Math.min(iw / W, ih / H);
+  offX = (iw - W * scale) / 2; offY = (ih - H * scale) / 2;
+  cv.width = Math.round(iw * dpr); cv.height = Math.round(ih * dpr);
+  cv.style.width = iw + 'px'; cv.style.height = ih + 'px';
+  document.getElementById('rot').style.display = (ih > iw * 1.15 && iw < 900) ? 'flex' : 'none';
+}
+addEventListener('resize', resize); resize();
+
+// ---------- maths
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const ease = t => { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
+const back = t => { t = clamp(t, 0, 1); const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+function hs(n) { const s = Math.sin(n * 12.9898) * 43758.5453; return s - Math.floor(s); }
+function hex(c) { return [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)); }
+function mix(a, b, t) { const A = hex(a), B = hex(b); return 'rgb(' + A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(',') + ')'; }
+
+// ---------- hand-drawn primitives (lines "boil" at 8 fps like drawn animation)
+let boil = 0, sc = 0, T = 0;
+function h(n) { const s = Math.sin(n * 12.9898 + boil * 78.233) * 43758.5453; return s - Math.floor(s); }
+function jp(pts, amp) {
+  const k = (++sc) * 7.31; if (amp === undefined) amp = 1.7;
+  return pts.map((p, i) => [p[0] + (h(k + i * 3.17) * 2 - 1) * amp, p[1] + (h(k + i * 5.91 + 0.37) * 2 - 1) * amp]);
+}
+function tracePts(p, closed) {
+  const n = p.length;
+  if (closed) {
+    ctx.moveTo((p[n - 1][0] + p[0][0]) / 2, (p[n - 1][1] + p[0][1]) / 2);
+    for (let i = 0; i < n; i++) { const a = p[i], b = p[(i + 1) % n]; ctx.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2); }
+    ctx.closePath();
+  } else {
+    ctx.moveTo(p[0][0], p[0][1]);
+    for (let i = 1; i < n - 1; i++) { const a = p[i], b = p[i + 1]; ctx.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2); }
+    ctx.lineTo(p[n - 1][0], p[n - 1][1]);
+  }
+}
+function blob(pts, fill, lw, stroke) {
+  ctx.beginPath(); tracePts(jp(pts), true);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (lw !== 0) { ctx.lineJoin = 'round'; ctx.lineWidth = lw || 5; ctx.strokeStyle = stroke || INK; ctx.stroke(); }
+}
+function line(pts, lw, col) {
+  ctx.beginPath(); tracePts(jp(pts, 1.2), false);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = lw || 5; ctx.strokeStyle = col || INK; ctx.stroke();
+}
+function tube(pts, w, col, lw) { // outlined thick stroke, e.g. a sleeve
+  const p = jp(pts, 1.2); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath(); tracePts(p, false); ctx.strokeStyle = INK; ctx.lineWidth = w + (lw || 9); ctx.stroke();
+  ctx.beginPath(); tracePts(p, false); ctx.strokeStyle = col; ctx.lineWidth = w; ctx.stroke();
+}
+function circPts(x, y, rx, ry, n) {
+  ry = ry || rx; n = n || Math.max(10, Math.min(40, Math.round(rx / 3)));
+  const a = []; for (let i = 0; i < n; i++) { const t = i / n * Math.PI * 2; a.push([x + Math.cos(t) * rx, y + Math.sin(t) * ry]); } return a;
+}
+function polyPts(c, r) {
+  const pts = [];
+  for (let i = 0; i < c.length; i++) {
+    const a = c[i], b = c[(i + 1) % c.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const rr = Math.max(1, Math.min(r, L / 2 - 1)), ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L;
+    pts.push(a);
+    const n = Math.max(1, Math.round((L - 2 * rr) / 70));
+    for (let k = 0; k <= n; k++) { const d = rr + (L - 2 * rr) * k / n; pts.push([a[0] + ux * d, a[1] + uy * d]); }
+  }
+  return pts;
+}
+function rectPts(x, y, w, hh, r) { return polyPts([[x, y], [x + w, y], [x + w, y + hh], [x, y + hh]], r || 8); }
+function dot(x, y, r, c) { ctx.fillStyle = c || INK; ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill(); }
+function star(x, y, r, col) {
+  const p = []; for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r; p.push([x + Math.cos(a) * rr, y + Math.sin(a) * rr]); }
+  ctx.beginPath(); tracePts(jp(p, 1), true); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.stroke();
+}
+
+// crayon grain laid over every frame
+const grain = document.createElement('canvas'); grain.width = grain.height = 256;
+(() => {
+  const g = grain.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2200; i++) {
+    const x = Math.random() * 256, y = Math.random() * 256, l = 3 + Math.random() * 10;
+    g.strokeStyle = 'rgba(95,65,40,' + (Math.random() * 0.2).toFixed(3) + ')'; g.lineWidth = 0.6 + Math.random() * 1.3;
+    for (const [ox, oy] of [[0, 0], [-256, 0], [0, -256], [256, 0], [0, 256]]) { g.beginPath(); g.moveTo(x + ox, y + oy); g.lineTo(x + ox + l * 0.8, y + oy - l * 0.5); g.stroke(); }
+  }
+})();
+const grainPat = ctx.createPattern(grain, 'repeat');
+
+// ---------- audio (all synthesised)
+let AC = null, master, musicBus, sfxBus, noiseBuf, muted = false;
+function initAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    master = AC.createGain(); master.gain.value = muted ? 0 : 0.7; master.connect(AC.destination);
+    musicBus = AC.createGain(); musicBus.gain.value = 0.2; musicBus.connect(master);
+    sfxBus = AC.createGain(); sfxBus.gain.value = 0.8; sfxBus.connect(master);
+    noiseBuf = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  } catch (e) { AC = null; }
+  try { if (window.speechSynthesis) { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } } catch (e) {}
+}
+function tone(f, t, d, type, vol, dest, f2) {
+  if (!AC) return;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type || 'sine'; o.frequency.setValueAtTime(f, t);
+  if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + d);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g); g.connect(dest || sfxBus); o.start(t); o.stop(t + d + 0.05);
+}
+function noise(t, d, vol, freq, q, type, dest, f2) {
+  if (!AC) return;
+  const s = AC.createBufferSource(); s.buffer = noiseBuf;
+  const f = AC.createBiquadFilter(); f.type = type || 'bandpass'; f.frequency.setValueAtTime(freq || 1000, t); f.Q.value = q || 1;
+  if (f2) f.frequency.exponentialRampToValueAtTime(f2, t + d);
+  const g = AC.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  s.connect(f); f.connect(g); g.connect(dest || sfxBus); s.start(t, Math.random() * 1.5); s.stop(t + d + 0.05);
+}
+const now = () => AC ? AC.currentTime : 0;
+let lastPop = 0;
+const sfx = {
+  pop() { if (T - lastPop < 0.05) return; lastPop = T; tone(500 + Math.random() * 300, now(), 0.12, 'sine', 0.35, null, 1200); },
+  crunch() { const t = now(); for (let i = 0; i < 3; i++) noise(t + i * 0.045, 0.07, 0.5, 1600 + Math.random() * 1600, 1.5); },
+  stamp() { const t = now(); tone(150, t, 0.3, 'sine', 0.9, null, 45); noise(t, 0.18, 0.7, 400, 0.8, 'lowpass'); },
+  squeak() { tone(900, now(), 0.18, 'square', 0.1, null, 1700); },
+  woof() { const t = now(); [0, 0.2].forEach(o => { tone(320, t + o, 0.16, 'sawtooth', 0.22, null, 130); noise(t + o, 0.1, 0.25, 700, 2); }); },
+  bubble() { const t = now(); [0, 0.1, 0.18].forEach((o, i) => tone(380 + i * 120, t + o, 0.09, 'sine', 0.3, null, 900 + i * 200)); },
+  whoosh() { noise(now(), 0.35, 0.4, 400, 0.8, 'bandpass', null, 3000); },
+  sparkle() { const t = now(); [1318, 1568, 1976, 2637].forEach((f, i) => tone(f, t + i * 0.06, 0.35, 'triangle', 0.13)); },
+  boing(p) { p = p || 1; tone(160 * p, now(), 0.38, 'sine', 0.5, null, 520 * p); },
+  giggle() { const t = now(); for (let i = 0; i < 4; i++) tone(700 + i * 70 + Math.random() * 50, t + i * 0.08, 0.07, 'sine', 0.2, null, 950); },
+  bonk() { const t = now(); tone(240, t, 0.3, 'square', 0.18, null, 80); noise(t, 0.1, 0.4, 900, 1); },
+  tick() { tone(1100, now(), 0.05, 'square', 0.07); },
+  tweet() { const t = now(); tone(2400, t, 0.08, 'sine', 0.2, null, 3200); tone(2600, t + 0.1, 0.08, 'sine', 0.2, null, 3400); },
+  crash() { const t = now(); noise(t, 0.6, 0.8, 1200, 0.5, 'lowpass', null, 200); tone(90, t, 0.5, 'sawtooth', 0.35, null, 40); },
+  scratch() { const t = now(); noise(t, 0.35, 0.6, 3000, 2, 'bandpass', null, 300); },
+  scribble() { const t = now(); for (let i = 0; i < 10; i++) noise(t + i * 0.07, 0.06, 0.25, 2500 + Math.random() * 2000, 3); },
+  gulp() { const t = now(); tone(300, t, 0.15, 'sine', 0.5, null, 90); },
+};
+let rum = null;
+function rumble(v) {
+  if (!AC) return;
+  if (!rum) {
+    const o = AC.createOscillator(), g = AC.createGain(), f = AC.createBiquadFilter();
+    o.type = 'sawtooth'; o.frequency.value = 50; f.type = 'lowpass'; f.frequency.value = 350; g.gain.value = 0;
+    o.connect(f); f.connect(g); g.connect(sfxBus); o.start(); rum = { o, g };
+  }
+  rum.g.gain.setTargetAtTime(v * 0.35, AC.currentTime, 0.03);
+  rum.o.frequency.setTargetAtTime(50 + v * 120, AC.currentTime, 0.05);
+}
+function stopRumble() {
+  if (!rum) return; const r = rum; rum = null;
+  r.g.gain.setTargetAtTime(0, AC.currentTime, 0.05); setTimeout(() => { try { r.o.stop(); } catch (e) {} }, 400);
+}
+
+// music: a tiny step sequencer whose mood follows the story
+let mMode = 'off', mStep = 0, mNext = 0, mInt = 0;
+const MEL = [72, 0, 76, 0, 79, 0, 76, 0, 77, 0, 81, 0, 77, 0, 72, 0, 74, 0, 79, 0, 83, 0, 79, 81, 79, 76, 72, 0, 72, 0, 0, 0];
+const CH = [48, 53, 55, 48];
+const midi = n => 440 * Math.pow(2, (n - 69) / 12);
+function music(m) { mMode = m; mStep = 0; if (AC) mNext = AC.currentTime + 0.05; }
+function mt(n, t, d, type, vol) { tone(midi(n), t, d, type, vol, musicBus); }
+function playStep(s, t, sd) {
+  const i = s % 32, bar = Math.floor(i / 8);
+  if (mMode === 'calm') {
+    if (MEL[i]) mt(MEL[i], t, sd * 1.6, 'triangle', 0.5);
+    if (i % 4 === 0) mt(CH[bar], t, sd * 3, 'sine', 0.7);
+    if (i % 8 === 4) mt(CH[bar] + 7, t, sd * 2, 'sine', 0.35);
+  } else if (mMode === 'tense') {
+    if (i % 4 === 0) tone(58, t, 0.3, 'sine', 0.9, musicBus, 40);
+    if (i % 8 === 6) tone(58, t, 0.25, 'sine', 0.6, musicBus, 40);
+    if (i % 16 === 0) mt(61, t, sd * 6, 'triangle', 0.22);
+    if (i % 16 === 8) mt(60, t, sd * 6, 'triangle', 0.22);
+  } else if (mMode === 'chaos') {
+    const n = MEL[i];
+    if (n) { mt(n, t, sd * 1.2, 'square', 0.16 + 0.12 * mInt); if (mInt > 0.4) mt(n + 12, t, sd * 0.8, 'triangle', 0.2 * mInt); }
+    if (i % 4 === 0) { tone(120, t, 0.18, 'sine', 0.9, musicBus, 45); mt(CH[bar] - 12, t, sd * 2, 'sawtooth', 0.16); }
+    if (i % 8 === 4) noise(t, 0.12, 0.35, 1800, 0.8, 'bandpass', musicBus);
+    if (mInt > 0.2) noise(t, 0.04, 0.1 + 0.12 * mInt, 7000, 1, 'highpass', musicBus);
+  } else if (mMode === 'quiet') {
+    if (i % 16 === 0) [60, 64, 67].forEach(n => tone(midi(n), t, sd * 14, 'sine', 0.16, musicBus));
+    if (i % 16 === 10) mt(79, t, sd * 4, 'sine', 0.18);
+  }
+}
+setInterval(() => {
+  if (!AC || mMode === 'off') return;
+  const bpm = mMode === 'chaos' ? 118 + mInt * 60 : mMode === 'quiet' ? 80 : mMode === 'tense' ? 92 : 108;
+  const sd = 60 / bpm / 2;
+  if (mNext < AC.currentTime) mNext = AC.currentTime + 0.02;
+  while (mNext < AC.currentTime + 0.12) { playStep(mStep++, mNext, sd); mNext += sd; }
+}, 30);
+
+// speech (stand-in for recorded voice acting)
+let voice = null;
+function pickVoice() {
+  try {
+    const vs = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
+    voice = vs.find(v => /en-GB/i.test(v.lang)) || vs.find(v => /en-AU/i.test(v.lang)) || vs[0] || null;
+  } catch (e) {}
+}
+try { if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; } } catch (e) {}
+function say(text, o) {
+  if (muted) return;
+  try {
+    if (!window.speechSynthesis) return; o = o || {};
+    const u = new SpeechSynthesisUtterance(text);
+    u.pitch = o.pitch || 1.4; u.rate = o.rate || 1; u.volume = o.vol === undefined ? 1 : o.vol;
+    if (voice) u.voice = voice;
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
+// ---------- world state
+const PL = { boy: 470, mnf: 800, girl: 1130 }; // plate x positions
+const PLY = 652;
+const SHIRT = { mnf: '#f6b820', girl: '#9a74d6', boy: '#5aab4d' };
+const SKIN = { mnf: '#f4b98f', girl: '#b97a4e', boy: '#e8ad86' };
+const POSE = {
+  rest: { L: [-85, -12], R: [85, -12] },
+  up: { L: [-165, -300], R: [165, -300] },
+  chin: { L: [-85, -12], R: [20, -168] },
+  offerR: { L: [-85, -12], R: [205, -110] },
+  self: { L: [-85, -12], R: [8, -95] },
+  cheer: { L: [-150, -260], R: [150, -260] },
+  reachTin: { L: [-160, -30], R: [85, -12] },
+  reachL: { L: [-170, -70], R: [85, -12] },
+  holdUpL: { L: [-110, -235], R: [85, -12] },
+};
+function mkKid(kind, x) {
+  return { kind, x, tx: x, y: 600, s: 1, ts: 1, expr: 'neutral', look: 0, tlook: 0, hands: { L: [-85, -12], R: [85, -12] }, th: { L: [-85, -12], R: [85, -12] }, hop: 0, shake: 0, talk: 0, puff: 0, tpuff: 0, red: 0, bub: 0, bubble: 0, glow: 0 };
+}
+function pose(k, p) { if (typeof p === 'string') p = POSE[p]; k.th = { L: p.L.slice(), R: p.R.slice() }; }
+function handWorld(k, side) { return { x: k.x + k.hands[side][0] * k.s, y: k.y + k.hands[side][1] * k.s }; }
+
+let kids = {}, biscuits = [], fx = [], teddy, dog, bird, fish, ants = [], tower = null;
+const tin = { x: 635, tx: 635, y: 672, open: false, lidP: 0, shake: 0 };
+const arm = { p: 0, tp: 0 };
+const hmF = new Float32Array(40), hmT = new Float32Array(40);
+const cam = { x: 800, y: 450, z: 1, tx: 800, ty: 450, tz: 1 };
+let shake = 0, desat = 0, tdesat = 0, wipe = null, pinShown = false;
+let bid = 0;
+const S = { phase: 'title', pt: 0, idle: 0, gen: 0, rule: { who: null, what: null } };
+let timers = [];
+function later(d, fn) { timers.push({ t: d, fn, gen: S.gen }); }
+
+function resetActors() {
+  teddy = { x: 165, y: 405, state: 'shelf', bounce: 0, t: 0 };
+  dog = { x: 1470, y: 872, state: 'sleep', dir: -1, tx: 1470, chew: 0, t: 0, sx: 0, sy: 0, ex: 0, ey: 0, then: null };
+  bird = { x: 1700, y: 60, state: 'away', t: 0 };
+  fish = { x: 1340, y: 604, excite: 0 };
+  ants = [];
+}
+function mkB(x, y, r, chips) {
+  return { id: ++bid, x, y, r, tr: r, chips: chips === undefined ? Math.round(r / 10) : chips, mode: 'rest', vx: 0, vy: 0, flat: 0, tflat: 0, rot: 0, spin: 0, layer: 'table', owner: null, place: null, ox: 0, oy: 0 };
+}
+function flyB(b, tx, ty, dur, arc, after) { b.mode = 'fly'; b.sx = b.x; b.sy = b.y; b.fx = tx; b.fy = ty; b.ft = 0; b.fd = dur; b.arc = arc || 0; b.after = after || null; }
+
+function resetScene(mode) {
+  biscuits = []; fx = []; hmF.fill(0); hmT.fill(0); tower = null; pinShown = false;
+  kids = { boy: mkKid('boy', PL.boy), mnf: mkKid('mnf', PL.mnf), girl: mkKid('girl', PL.girl) };
+  tin.x = tin.tx = 635; tin.shake = 0;
+  if (mode === 'fresh') { resetActors(); tin.open = false; tin.lidP = 0; arm.p = arm.tp = 0; return; }
+  tin.open = true; tin.lidP = 1; ants = []; arm.p = arm.tp = 0;
+  if (teddy.state === 'jump') { teddy.state = 'table'; teddy.x = 215; teddy.y = 668; }
+  if (dog.state === 'walk' || dog.state === 'leap') { dog.state = 'sit'; dog.x = dog.tx = 1190; }
+  if (bird.state === 'fly') { bird.state = 'sit'; bird.x = 1290; bird.y = 358; }
+  const add = (o, r, c) => { const b = mkB(PL[o], PLY, r, c); b.owner = o; b.place = 'flat'; b.flat = b.tflat = 1; biscuits.push(b); return b; };
+  add('boy', 70, 7); add('girl', 40, 0); add('mnf', 13, 1);
+  for (let i = 0; i < 7; i++) { const c = mkB(260 + hs(i + 3) * 1060, 690 + hs(i + 9) * 50, 2.5 + hs(i) * 2.5, 0); biscuits.push(c); }
+}
+
+function anchor(n) {
+  if (!n) return null;
+  if (PL[n] !== undefined) return { x: PL[n], y: PLY };
+  if (n.startsWith('hand:')) { const [, k, s] = n.split(':'); return handWorld(kids[k], s); }
+  switch (n) {
+    case 'teddy': return { x: teddy.x + 45, y: teddy.y - 20 };
+    case 'fish': return { x: fish.x, y: fish.y + 30 };
+    case 'dog': return { x: dog.x + dog.dir * 72, y: dog.y - 100 };
+    case 'bird': return { x: bird.x + 34, y: bird.y - 6 };
+    case 'halo': return { x: 800, y: 600 - 150 * kids.mnf.s };
+  }
+  if (n.startsWith('ant')) { const a = ants[+n.slice(3)]; return a ? { x: a.x, y: a.y - 12 } : { x: 100, y: 880 }; }
+  return null;
+}
+
+// ---------- drawing: characters
+function face(k, ey) {
+  const e = k.expr, lx = k.look * 8, ew = 28;
+  if (e === 'joy') {
+    line([[-ew - 10 + lx, ey + 3], [-ew + lx, ey - 7], [-ew + 10 + lx, ey + 3]], 5);
+    line([[ew - 10 + lx, ey + 3], [ew + lx, ey - 7], [ew + 10 + lx, ey + 3]], 5);
+  } else {
+    const r = (e === 'shock' || e === 'notice') ? 9 : 7;
+    dot(-ew + lx, ey, r); dot(ew + lx, ey, r);
+  }
+  const by = ey - 26;
+  const B = {
+    neutral: [[-ew - 12, by + 1, -ew + 12, by - 2], [ew - 12, by - 2, ew + 12, by + 1]],
+    happy: [[-ew - 12, by - 2, -ew + 12, by - 6], [ew - 12, by - 6, ew + 12, by - 2]],
+    joy: [[-ew - 12, by - 6, -ew + 12, by - 10], [ew - 12, by - 10, ew + 12, by - 6]],
+    angry: [[-ew - 14, by - 8, -ew + 12, by + 7], [ew - 12, by + 7, ew + 14, by - 8]],
+    sad: [[-ew - 12, by + 4, -ew + 12, by - 8], [ew - 12, by - 8, ew + 12, by + 4]],
+    shock: [[-ew - 12, by - 12, -ew + 12, by - 16], [ew - 12, by - 16, ew + 12, by - 12]],
+    notice: [[-ew - 12, by - 8, -ew + 12, by - 12], [ew - 12, by - 12, ew + 12, by - 8]],
+    think: [[-ew - 12, by + 3, -ew + 12, by + 3], [ew - 12, by - 12, ew + 12, by - 5]],
+  }[e] || [[-ew - 12, by, -ew + 12, by], [ew - 12, by, ew + 12, by]];
+  B.forEach(b => line([[b[0] + lx * 0.5, b[1]], [(b[0] + b[2]) / 2 + lx * 0.5, (b[1] + b[3]) / 2 - 2], [b[2] + lx * 0.5, b[3]]], 5));
+  // nose: a little "c"
+  ctx.beginPath(); ctx.arc(2 + lx * 0.4, ey + 20, 7, -1.9, 1.9, true); ctx.lineWidth = 4; ctx.strokeStyle = INK; ctx.stroke();
+  const my = ey + 50, mx = lx * 0.4, R = '#c4412e';
+  const talking = k.talk > 0 && Math.floor(T * 11) % 2 === 0;
+  if (talking && e !== 'shock' && e !== 'angry') { blob(circPts(mx, my + 2, 16, 12, 12), R, 4); return; }
+  ctx.save(); ctx.translate(mx, 0);
+  switch (e) {
+    case 'happy': blob([[-24, my - 6], [24, my - 6], [16, my + 12], [0, my + 16], [-16, my + 12]], R, 4); break;
+    case 'joy': blob([[-30, my - 8], [30, my - 8], [20, my + 18], [0, my + 22], [-20, my + 18]], R, 4); blob(circPts(0, my + 12, 10, 6, 10), '#f28a8a', 0); break;
+    case 'angry': blob([[-24, my + 16], [-22, my - 2], [-10, my - 10], [10, my - 10], [22, my - 2], [24, my + 16], [0, my + 12]], R, 4); break;
+    case 'sad': line([[-18, my + 8], [0, my - 2], [18, my + 8]], 5); break;
+    case 'shock': blob(circPts(0, my + 4, 13, 17, 12), R, 4); break;
+    case 'notice': blob(circPts(0, my + 2, 8, 10, 10), R, 4); break;
+    case 'think': line([[-16, my + 2], [-5, my - 2], [6, my + 3], [16, my]], 5); break;
+    default: line([[-15, my - 2], [0, my + 5], [15, my - 2]], 5);
+  }
+  ctx.restore();
+}
+function drawArm(sx, sy, hx, hy, shirt, skin, side) {
+  const dx = hx - sx, dy = hy - sy, d = Math.hypot(dx, dy) || 1, L = 190;
+  let ex = (sx + hx) / 2, ey = (sy + hy) / 2;
+  if (d < L) {
+    const off = Math.sqrt((L / 2) ** 2 - (d / 2) ** 2) * 0.8;
+    let nx = -dy / d, ny = dx / d; if (ny + nx * side * 0.6 < 0) { nx = -nx; ny = -ny; }
+    ex += nx * off; ey += ny * off;
+  }
+  tube([[sx, sy], [ex, ey], [hx, hy]], 30, shirt, 10);
+  blob(circPts(hx, hy, 18, 18, 10), skin, 4);
+}
+function drawLegs() {
+  blob(polyPts([[-72, 20], [-6, 20], [-12, 192], [-64, 192]], 10), '#2f5fc4', 5);
+  blob(polyPts([[6, 20], [72, 20], [64, 192], [12, 192]], 10), '#2f5fc4', 5);
+  blob(circPts(-44, 200, 42, 18, 14), '#1e1a19', 4); blob(circPts(44, 200, 42, 18, 14), '#1e1a19', 4);
+}
+function drawKid(k, legs) {
+  let x = k.x, y = k.y + Math.sin(T * 2.2 + k.x * 0.01) * 2.5;
+  if (k.hop > 0) y -= Math.sin(k.hop * Math.PI) * 36;
+  if (k.shake > 0) x += Math.sin(T * 70) * 7 * k.shake;
+  if (k.glow > 0.01) { // soft "look here" glow
+    const g = ctx.createRadialGradient(x, y - 180, 20, x, y - 180, 240);
+    g.addColorStop(0, 'rgba(255,236,150,' + (0.55 * k.glow) + ')'); g.addColorStop(1, 'rgba(255,236,150,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y - 180, 240, 0, 6.2832); ctx.fill();
+  }
+  ctx.save(); ctx.translate(x, y); const s = k.s * (1 + k.puff * 0.12); ctx.scale(s, s);
+  const skin = k.red > 0.01 ? mix(SKIN[k.kind], '#e8573c', k.red * 0.55) : SKIN[k.kind];
+  const shirt = SHIRT[k.kind];
+  if (legs) drawLegs();
+  blob(rectPts(-20, -178, 40, 40, 8), skin, 4);
+  blob(polyPts([[-70, -160], [70, -160], [84, 40], [-84, 40]], 24), shirt, 5);
+  if (k.kind === 'mnf') {
+    ctx.fillStyle = INK; ctx.font = '40px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('Mr', 0, -112); ctx.fillText('Not', 0, -74); ctx.fillText('Fair', 0, -36);
+  }
+  if (k.kind === 'mnf') {
+    blob(circPts(-80, -226, 14, 18, 10), skin, 4); blob(circPts(80, -226, 14, 18, 10), skin, 4);
+    blob(rectPts(-76, -305, 152, 148, 30), skin, 5);
+    blob(polyPts([[-90, -206], [-93, -286], [-66, -324], [0, -334], [66, -324], [93, -286], [90, -206], [74, -206], [70, -262], [20, -273], [-28, -259], [-72, -262], [-74, -206]], 10), '#8a5a2b', 5);
+    line([[-40, -304], [-48, -272]], 3); line([[34, -308], [42, -276]], 3); line([[-82, -280], [-84, -222]], 3); line([[82, -280], [84, -222]], 3);
+    face(k, -246);
+  } else if (k.kind === 'girl') {
+    blob([[48, -272], [108, -258], [132, -208], [120, -150], [98, -165], [100, -214], [62, -238]], '#4a2c1a', 5);
+    blob(circPts(66, -258, 11, 13, 10), '#e0412f', 3);
+    blob(circPts(-70, -226, 12, 16, 10), skin, 4); blob(circPts(70, -226, 12, 16, 10), skin, 4);
+    blob(circPts(0, -228, 70, 74, 28), skin, 5);
+    blob([[-74, -212], [-77, -262], [-50, -298], [0, -308], [50, -298], [75, -262], [72, -232], [40, -268], [-10, -272], [-50, -256], [-62, -218]], '#4a2c1a', 5);
+    dot(-44, -206, 11, 'rgba(230,110,110,0.35)'); dot(44, -206, 11, 'rgba(230,110,110,0.35)');
+    face(k, -238);
+  } else {
+    blob(circPts(-72, -226, 12, 16, 10), skin, 4); blob(circPts(72, -226, 12, 16, 10), skin, 4);
+    blob(circPts(0, -228, 72, 72, 28), skin, 5);
+    [[-64, -250], [-50, -284], [-20, -300], [14, -302], [44, -290], [64, -262], [-74, -224], [72, -234]].forEach(b => blob(circPts(b[0], b[1], 24, 22, 10), '#3d2a1e', 4));
+    dot(-44, -206, 11, 'rgba(230,110,110,0.35)'); dot(44, -206, 11, 'rgba(230,110,110,0.35)');
+    face(k, -236);
+  }
+  const side = { L: -1, R: 1 };
+  for (const sd of ['L', 'R']) drawArm(side[sd] * 60, -138, k.hands[sd][0], k.hands[sd][1], shirt, skin, side[sd]);
+  ctx.restore();
+}
+function drawTeddy() {
+  let y = teddy.y; if (teddy.bounce > 0) y -= Math.sin(teddy.bounce * Math.PI) * 25;
+  ctx.save(); ctx.translate(teddy.x, y); ctx.scale(0.85, 0.85);
+  const B = '#a86a3c', L = '#e2b27f';
+  blob(circPts(-28, -10, 20, 14), B, 4); blob(circPts(28, -10, 20, 14), B, 4);
+  blob(circPts(0, -50, 42, 46), B, 5); blob(circPts(0, -45, 24, 26), L, 3);
+  blob(circPts(-42, -62, 14, 22), B, 4); blob(circPts(42, -62, 14, 22), B, 4);
+  blob(circPts(-28, -140, 15, 15), B, 4); blob(circPts(28, -140, 15, 15), B, 4);
+  blob(circPts(0, -110, 40, 36), B, 5); blob(circPts(0, -98, 17, 13), L, 3);
+  dot(-14, -118, 5); dot(14, -118, 5); dot(0, -104, 5);
+  line([[-7, -94], [0, -90], [7, -94]], 3);
+  ctx.restore();
+}
+function drawDog() {
+  const d = dog; ctx.save(); ctx.translate(d.x, d.y); ctx.scale(d.dir, 1);
+  const Wt = '#f7f1e3', Br = '#8a5a2b';
+  if (d.state === 'sleep') {
+    line([[-72, -28], [-98, -44], [-94, -58]], 7);
+    blob(circPts(0, -34, 78, 36), Wt, 5); blob(circPts(-18, -46, 24, 14), Br, 0);
+    blob(circPts(60, -38, 36, 30), Wt, 5);
+    blob([[48, -62], [74, -60], [70, -22], [56, -28]], Br, 4);
+    line([[62, -42], [70, -37], [78, -42]], 3); dot(95, -36, 5);
+    ctx.scale(d.dir, 1); ctx.fillStyle = INK; ctx.font = '34px ' + FONT; ctx.textAlign = 'center';
+    const zt = (T * 0.8) % 1; ctx.globalAlpha = 1 - zt; ctx.fillText('z', d.dir * (90 + zt * 20), -80 - zt * 40); ctx.globalAlpha = 1;
+  } else {
+    const w = Math.sin(T * 16) * 12;
+    line([[-50, -30], [-78, -52 + w], [-86, -80 + w]], 8);
+    blob(circPts(-8, -52, 52, 52), Wt, 5); blob(circPts(-24, -64, 22, 16), Br, 0);
+    blob(rectPts(8, -42, 22, 44, 9), Wt, 4); blob(rectPts(36, -42, 22, 44, 9), Wt, 4);
+    blob(circPts(28, -118, 40, 36), Wt, 5); blob(circPts(62, -106, 25, 17), Wt, 4);
+    blob(circPts(84, -112, 8, 6), INK, 0);
+    blob([[6, -148], [-8, -100], [8, -92], [22, -132]], Br, 4);
+    dot(42, -126, 5);
+    if (d.chew > 0) { const c = Math.abs(Math.sin(T * 18)) * 5; line([[48, -96 + c], [62, -92], [76, -96 + c]], 4); }
+    else blob(rectPts(56, -98, 13, 20, 6), '#f07a8a', 3);
+  }
+  ctx.restore();
+}
+function drawBird() {
+  if (bird.state === 'away') return;
+  ctx.save(); ctx.translate(bird.x, bird.y);
+  const f = bird.state === 'fly' ? Math.sin(T * 30) : 0;
+  blob(circPts(0, -20, 22, 18), '#4f86d6', 4); blob(circPts(18, -38, 13, 13), '#4f86d6', 4);
+  blob([[29, -41], [42, -37], [29, -33]], '#f5a623', 3); dot(21, -41, 3);
+  blob([[-10, -24], [10, -26 - 22 * f], [2, -12]], '#3a6fbf', 3);
+  line([[-4, -3], [-4, 4]], 3); line([[6, -3], [6, 4]], 3);
+  ctx.restore();
+}
+function drawAnt(a) {
+  ctx.save(); ctx.translate(a.x, a.y); const st = Math.sin(T * 30 + a.x) * 3;
+  for (const lx of [-8, 0, 8]) line([[lx, -2], [lx - 5 + st, 6]], 2);
+  dot(-11, -4, 5); dot(0, -5, 4); dot(10, -6, 5.5); line([[13, -10], [18, -18]], 2);
+  ctx.restore();
+}
+function drawBowl() {
+  const x = fish.x, y = fish.y;
+  blob(circPts(x, y, 52, 50), 'rgba(170,220,245,0.6)', 5);
+  line([[x - 44, y - 22], [x, y - 17], [x + 44, y - 22]], 3, '#5aa7d6');
+  for (let i = 0; i < 5; i++) dot(x - 30 + i * 15, y + 40 - (i % 2) * 3, 6, ['#e0412f', '#f6b820', '#5aab4d', '#9a74d6', '#4f86d6'][i]);
+  const fxx = x + Math.sin(T * 1.5) * 18, fy = y + 8 + Math.sin(T * 2.3) * 4 - fish.excite * Math.abs(Math.sin(T * 12)) * 22;
+  const dir = Math.cos(T * 1.5) > 0 ? 1 : -1;
+  ctx.save(); ctx.translate(fxx, fy); ctx.scale(dir, 1);
+  blob([[-14, 0], [-28, -11], [-28, 11]], '#f68a2b', 3); blob(circPts(0, 0, 16, 11, 12), '#f68a2b', 3); dot(8, -3, 2.5);
+  ctx.restore();
+}
+function drawTin() {
+  const x = tin.x + (tin.shake > 0 ? Math.sin(T * 50) * 5 * tin.shake : 0), y = tin.y;
+  const pulse = S.phase === 'start' ? 1 + Math.sin(T * 5) * 0.04 : 1;
+  ctx.save(); ctx.translate(x, y); ctx.scale(pulse, pulse);
+  blob(rectPts(-62, -58, 124, 58, 5), '#e0412f', 5);
+  for (let i = 0; i < 5; i++) for (let j = 0; j < 2; j++) dot(-48 + i * 24 + (j % 2) * 12, -40 + j * 22, 4.5, '#fff6ea');
+  if (tin.open) { blob(circPts(0, -58, 62, 16, 22), '#7a2016', 5); blob(circPts(-14, -60, 22, 7, 10), '#dca05a', 2); blob(circPts(18, -58, 20, 6, 10), '#dca05a', 2); }
+  else { blob(circPts(0, -62, 68, 18, 24), '#e84a36', 5); for (let i = 0; i < 4; i++) dot(-36 + i * 24, -62, 4, '#fff6ea'); }
+  ctx.restore();
+  if (tin.open) {
+    const e = ease(tin.lidP), lx = lerp(tin.x, 640, e), ly = lerp(tin.y - 62, 742, e) - Math.sin(e * Math.PI) * 80;
+    blob(circPts(lx, ly, 62, 16, 22), '#e84a36', 5);
+    for (let i = 0; i < 4; i++) dot(lx - 36 + i * 24, ly, 4, '#fff6ea');
+  }
+}
+function drawPlate(x) { blob(circPts(x, PLY + 8, 94, 27, 28), '#fbfbf5', 4); blob(circPts(x, PLY + 8, 62, 16, 22), null, 2, '#cfc9ba'); }
+function drawBiscuit(b) {
+  const r = b.r; if (r < 0.5) return;
+  ctx.save(); ctx.translate(b.x, b.y);
+  if (b.flat > 0.01) ctx.scale(1, 1 - 0.5 * b.flat);
+  if (b.rot) ctx.rotate(b.rot);
+  if (b.isChip) { blob([[0, -r * 1.3], [r * 0.9, r * 0.5], [0, r * 0.85], [-r * 0.9, r * 0.5]], '#5a3418', 3); ctx.restore(); return; }
+  if (r < 6) { ctx.fillStyle = '#c98a45'; ctx.beginPath(); ctx.arc(0, 0, r, 0, 6.2832); ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = INK; ctx.stroke(); ctx.restore(); return; }
+  blob(circPts(0, 0, r, r), '#dca05a', Math.max(2.5, Math.min(5, r / 6)));
+  if (r > 16) { ctx.fillStyle = 'rgba(255,232,175,0.35)'; ctx.beginPath(); ctx.arc(-r * 0.15, -r * 0.15, r * 0.6, 0, 6.2832); ctx.fill(); }
+  ctx.fillStyle = '#5a3418';
+  for (let i = 0; i < b.chips; i++) {
+    const a = hs(b.id * 31 + i * 7.7) * 6.2832, d = Math.sqrt(hs(b.id * 17 + i * 3.3)) * r * 0.68, cr = Math.max(2, r * 0.1);
+    ctx.beginPath(); ctx.ellipse(Math.cos(a) * d, Math.sin(a) * d, cr, cr * 0.8, a, 0, 6.2832); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawTower() {
+  if (!tower || !tower.n) return;
+  const sway = Math.sin(T * 2.6) * tower.amp;
+  for (let i = 0; i < tower.n; i++) {
+    const hgt = i * 19, x = tower.x + Math.sin(sway) * hgt * (1 + hgt / 900), y = tower.base - hgt;
+    blob(rectPts(x - 58, y - 20, 116, 20, 9), '#dca05a', 4);
+    dot(x - 30, y - 10, 3, '#5a3418'); dot(x + 12, y - 9, 3, '#5a3418'); dot(x + 36, y - 11, 3, '#5a3418');
+  }
+}
+function drawBubble(x, y, w, hh, tx, ty, a, content) {
+  if (a < 0.01) return;
+  ctx.save(); ctx.globalAlpha = Math.min(1, a);
+  const s = back(a); ctx.translate(x, y); ctx.scale(s, s); ctx.translate(-x, -y);
+  for (let i = 1; i <= 3; i++) { const u = i / 4; blob(circPts(lerp(tx, x, u), lerp(ty, y + hh / 2, u), 6 + i * 4, 6 + i * 4, 10), '#fffdf6', 4); }
+  const pts = []; for (let i = 0; i < 34; i++) { const t = i / 34 * 6.2832, b = 1 + 0.08 * Math.abs(Math.sin(t * 5)); pts.push([x + Math.cos(t) * w / 2 * b, y + Math.sin(t) * hh / 2 * b]); }
+  blob(pts, '#fffdf6', 5);
+  content();
+  ctx.restore();
+}
+function chippy(x, y, r) { const b = mkB(x, y, r, 14); b.id = 999; drawBiscuit(b); }
+
+// ---------- drawing: the room
+function drawRoom() {
+  ctx.fillStyle = '#f3e2bf'; ctx.fillRect(-300, -300, W + 600, 860);
+  ctx.fillStyle = 'rgba(214,170,110,0.2)';
+  for (let y = 40, r = 0; y < 540; y += 70, r++) for (let x = (r % 2) * 45; x < W; x += 90) { ctx.beginPath(); ctx.arc(x, y, 5, 0, 6.2832); ctx.fill(); }
+  ctx.fillStyle = '#d6a068'; ctx.fillRect(-300, 555, W + 600, 700);
+  for (const y of [612, 690, 780, 870]) line([[-60, y], [W + 60, y + 4]], 3, 'rgba(120,70,30,0.3)');
+  blob(rectPts(-30, 538, W + 60, 26, 4), '#ecd0a4', 4);
+  // window
+  const wx = 1170, wy = 70, ww = 290, wh = 290;
+  blob(rectPts(wx - 16, wy - 16, ww + 32, wh + 32, 8), '#c98246', 5);
+  ctx.save(); ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
+  const gr = ctx.createLinearGradient(0, wy, 0, wy + wh); gr.addColorStop(0, '#8fcdf0'); gr.addColorStop(1, '#d4efff'); ctx.fillStyle = gr; ctx.fillRect(wx, wy, ww, wh);
+  for (let i = 0; i < 10; i++) { const a = i / 10 * 6.2832 + T * 0.3; line([[1395 + Math.cos(a) * 46, 135 + Math.sin(a) * 46], [1395 + Math.cos(a) * 64, 135 + Math.sin(a) * 64]], 5, '#f6b820'); }
+  blob(circPts(1395, 135, 34, 34), '#ffd23f', 4);
+  const cx = wx + ((T * 10) % (ww + 200)) - 100;
+  blob([[cx - 50, 205], [cx - 40, 180], [cx - 10, 172], [cx + 15, 160], [cx + 45, 175], [cx + 55, 205]], '#ffffff', 4);
+  blob(circPts(1210, 352, 70, 50), '#6cc05a', 4); blob(circPts(1320, 346, 80, 55), '#5aab4d', 4); blob(circPts(1440, 352, 70, 48), '#6cc05a', 4);
+  ctx.restore();
+  blob(rectPts(wx + ww / 2 - 7, wy, 14, wh, 2), '#c98246', 4); blob(rectPts(wx, wy + wh / 2 - 7, ww, 14, 2), '#c98246', 4);
+  blob(rectPts(wx - 30, wy + wh + 8, ww + 60, 22, 6), '#e0a060', 5);
+  line([[1080, 38], [1480, 38]], 8);
+  blob([[1098, 40], [1172, 40], [1166, 120], [1176, 220], [1160, 330], [1172, 424], [1108, 424], [1098, 300], [1112, 200], [1096, 110]], '#4f86d6', 5);
+  line([[1125, 60], [1130, 400]], 3, 'rgba(30,50,110,0.5)'); line([[1150, 60], [1148, 400]], 3, 'rgba(30,50,110,0.5)');
+  // child's drawing on the wall
+  blob(rectPts(560, 80, 210, 160, 6), '#e0a060', 5); blob(rectPts(578, 98, 174, 124, 4), '#fffaf0', 3);
+  for (let i = 0; i < 8; i++) { const a = i / 8 * 6.2832; line([[620 + Math.cos(a) * 22, 138 + Math.sin(a) * 22], [620 + Math.cos(a) * 32, 138 + Math.sin(a) * 32]], 3, '#f6b820'); }
+  blob(circPts(620, 138, 16, 16), '#ffd23f', 3);
+  blob(rectPts(690, 160, 12, 50, 3), '#8a5a2b', 3); blob(circPts(696, 150, 30, 28), '#5aab4d', 3);
+  line([[585, 210], [745, 212]], 5, '#6cc05a');
+  // bookshelf
+  blob(rectPts(30, 130, 290, 430, 10), '#c98246', 5);
+  blob(rectPts(50, 150, 250, 120, 4), '#a8652f', 3); blob(rectPts(50, 285, 250, 120, 4), '#a8652f', 3); blob(rectPts(50, 420, 250, 120, 4), '#a8652f', 3);
+  const bc = ['#e0412f', '#4f86d6', '#f6b820', '#5aab4d', '#9a74d6', '#f68a2b', '#4f86d6'];
+  for (let i = 0; i < 7; i++) { const hh = 88 + hs(i) * 22; blob(rectPts(60 + i * 34, 268 - hh, 28, hh, 4), bc[i], 4); }
+  blob(rectPts(80, 450, 130, 88, 8), '#3f7fd9', 4); blob(rectPts(120, 470, 50, 12, 6), '#2a5aa8', 3);
+  blob(rectPts(222, 470, 60, 68, 6), '#5aab4d', 4);
+  if (teddy.state === 'shelf') drawTeddy();
+  // rug
+  blob(circPts(800, 812, 770, 112, 64), '#bfe2da', 5);
+  const rc = ['#f6b820', '#4f86d6', '#5aab4d', '#e0412f', '#9a74d6'];
+  for (let i = 0; i < 14; i++) { const a = i / 14 * 6.2832; blob(circPts(800 + Math.cos(a) * 640, 812 + Math.sin(a) * 88, 26, 10, 12), rc[i % 5], 0); }
+  // toy box and ball
+  blob(rectPts(1440, 600, 170, 110, 8), '#f2c438', 5);
+  blob(rectPts(1460, 560, 44, 44, 4), '#e0412f', 4); blob(polyPts([[1516, 604], [1540, 556], [1564, 604]], 3), '#4f86d6', 4);
+  ctx.save(); ctx.beginPath(); ctx.arc(110, 822, 55, 0, 6.2832); ctx.clip();
+  ctx.fillStyle = '#f25c54'; ctx.fillRect(40, 760, 140, 130); ctx.fillStyle = '#f6b820'; ctx.fillRect(40, 800, 140, 22); ctx.fillStyle = '#4f86d6'; ctx.fillRect(40, 840, 140, 20);
+  ctx.restore(); blob(circPts(110, 822, 55, 55), null, 5);
+}
+function drawTable() {
+  for (const [x, y] of [[380, 760], [1180, 760], [560, 780], [1000, 780]]) blob(rectPts(x, y, 42, 120, 10), '#b8733a', 5);
+  blob(circPts(800, 702, 625, 92, 56), '#a8652f', 5);
+  blob(circPts(800, 680, 620, 90, 56), '#c98246', 5);
+  line([[420, 670], [720, 690]], 2, 'rgba(90,45,20,0.35)'); line([[900, 700], [1200, 684]], 2, 'rgba(90,45,20,0.35)'); line([[600, 730], [1000, 736]], 2, 'rgba(90,45,20,0.35)');
+}
+function drawGrownArm() {
+  if (arm.p < 0.01) return;
+  const e = ease(arm.p), hx = tin.x + 10, hy = lerp(-140, 560, e);
+  tube([[780, -200], [735, hy - 170], [hx, hy]], 62, '#e66f5c', 10);
+  blob(circPts(hx, hy + 12, 36, 30), '#f1c3a0', 5);
+}
+
+function drawWorld() {
+  drawRoom();
+  drawBird();
+  for (const b of biscuits) if (b.layer === 'back') drawBiscuit(b);
+  drawKid(kids.boy); drawKid(kids.mnf); drawKid(kids.girl);
+  drawTable();
+  drawPlate(PL.boy); drawPlate(PL.mnf); drawPlate(PL.girl);
+  drawTin(); drawBowl();
+  if (teddy.state !== 'shelf') drawTeddy();
+  const tb = biscuits.filter(b => b.layer === 'table').sort((a, b) => b.r - a.r);
+  for (const b of tb) drawBiscuit(b);
+  drawTower();
+  drawGrownArm();
+  drawDog();
+  ants.forEach(drawAnt);
+  for (const b of biscuits) if (b.layer === 'front') drawBiscuit(b);
+  drawFx();
+  const g = kids.girl;
+  drawBubble(g.x + 70, 170, 230, 170, g.x + 20, 300, g.bub, () => chippy(g.x + 70, 170, 58));
+}
+
+// ---------- effects
+function burstCrumbs(x, y, n) {
+  for (let i = 0; i < n; i++) fx.push({ type: 'crumb', x, y, vx: (Math.random() - 0.5) * 500, vy: -200 - Math.random() * 400, r: 2 + Math.random() * 4, life: 1.2 });
+}
+function sparkles(x, y, n) { for (let i = 0; i < n; i++) fx.push({ type: 'star', x: x + (Math.random() - 0.5) * 80, y: y + (Math.random() - 0.5) * 80, vy: -40 - Math.random() * 60, life: 0.9, r: 10 + Math.random() * 10 }); }
+function burstLines(x, y) { fx.push({ type: 'lines', x, y, life: 1.2, max: 1.2 }); }
+function updateFx(dt) {
+  for (const f of fx) {
+    f.life -= dt;
+    if (f.type === 'crumb') { f.vy += 1400 * dt; f.x += f.vx * dt; f.y += f.vy * dt; }
+    if (f.type === 'star') f.y += f.vy * dt;
+    if (f.type === 'slice' || f.type === 'ref') f.t = (f.t || 0) + dt;
+  }
+  fx = fx.filter(f => f.life > 0);
+}
+function drawFx() {
+  for (const f of fx) {
+    if (f.type === 'crumb') dot(f.x, f.y, f.r, '#c98a45');
+    else if (f.type === 'star') { ctx.globalAlpha = Math.min(1, f.life * 2); star(f.x, f.y, f.r, '#ffd23f'); ctx.globalAlpha = 1; }
+    else if (f.type === 'lines') {
+      const u = 1 - f.life / f.max;
+      for (let i = 0; i < 12; i++) { const a = i / 12 * 6.2832 + 0.2, r0 = 170 + u * 80, r1 = r0 + 60 + Math.sin(T * 20 + i) * 15; line([[f.x + Math.cos(a) * r0, f.y + Math.sin(a) * r0], [f.x + Math.cos(a) * r1, f.y + Math.sin(a) * r1]], 7); }
+    } else if (f.type === 'slice') {
+      const x = lerp(-300, 1900, f.t / 0.45);
+      ctx.save(); ctx.translate(x, 590); ctx.rotate(-0.08);
+      blob(rectPts(-260, -22, 230, 44, 10), '#e0412f', 5); blob(polyPts([[-30, -22], [40, 0], [-30, 22]], 4), '#f7d9b0', 5); blob(polyPts([[18, -7], [40, 0], [18, 7]], 2), '#e0412f', 3);
+      ctx.restore();
+      line([[-200, 600], [x - 250, 610]], 4, 'rgba(224,65,47,0.5)');
+    } else if (f.type === 'ref') {
+      const r = f.ref, a = Math.min(1, f.life * 2);
+      ctx.save(); ctx.globalAlpha = a; ctx.setLineDash([18, 12]); ctx.lineDashOffset = -T * 60;
+      if (r.t === 'c') blob(circPts(r.x, r.y, r.r + 8, r.r + 8), null, 7, '#e0412f');
+      else if (r.t === 'e') blob(circPts(r.x, r.y, r.rx + 8, r.ry + 8, 50), null, 7, '#e0412f');
+      else blob(rectPts(r.x - 8, r.y - 8, r.w + 16, r.hh + 16, 10), null, 7, '#e0412f');
+      ctx.setLineDash([]);
+      const b = biscuits.find(q => q.owner === 'mnf');
+      const mx = b ? (b.x + (r.t === 'r' ? r.x + r.w / 2 : r.x)) / 2 : 800, my = 180;
+      blob(rectPts(mx - 40, my - 22, 80, 16, 6), '#e0412f', 4); blob(rectPts(mx - 40, my + 6, 80, 16, 6), '#e0412f', 4);
+      ctx.restore();
+    }
+  }
+}
+
+// ---------- icons (cards, stickers, buttons)
+function miniFace(kind, x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  if (kind === 'mnf') {
+    blob(rectPts(-34, -32, 68, 66, 14), SKIN.mnf, 4);
+    blob(polyPts([[-40, -4], [-42, -32], [-26, -46], [0, -50], [26, -46], [42, -32], [40, -4], [31, -6], [29, -26], [6, -30], [-14, -25], [-31, -26], [-31, -4]], 5), '#8a5a2b', 4);
+    dot(-12, 2, 4.5); dot(12, 2, 4.5); line([[-11, 17], [0, 22], [11, 17]], 3);
+  } else if (kind === 'girl') {
+    blob([[20, -34], [52, -24], [58, 4], [44, 10], [40, -14]], '#4a2c1a', 3);
+    blob(circPts(0, 0, 34, 35, 18), SKIN.girl, 4);
+    blob([[-35, 6], [-36, -18], [-22, -35], [0, -40], [24, -35], [36, -18], [34, -4], [16, -22], [-8, -24], [-26, -12]], '#4a2c1a', 4);
+    dot(-12, 2, 4.5); dot(12, 2, 4.5); line([[-10, 16], [0, 21], [10, 16]], 3);
+  } else {
+    blob(circPts(0, 0, 35, 35, 18), SKIN.boy, 4);
+    [[-28, -18], [-14, -34], [8, -36], [26, -24], [-34, 0], [34, -4]].forEach(b => blob(circPts(b[0], b[1], 13, 12, 8), '#3d2a1e', 3));
+    dot(-12, 4, 4.5); dot(12, 4, 4.5); line([[-10, 18], [0, 23], [10, 18]], 3);
+  }
+  ctx.restore();
+}
+function iconBiscuit(x, y, r, chips, id) { const b = mkB(x, y, r, chips); b.id = id || 7; drawBiscuit(b); }
+function icon(id, x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  switch (id) {
+    case 'everyone': miniFace('boy', -46, 16, 0.78); miniFace('girl', 46, 16, 0.78); miniFace('mnf', 0, -16, 0.86); break;
+    case 'me':
+      miniFace('mnf', -8, -12, 1.35);
+      tube([[70, 90], [52, 52], [34, 36]], 16, SHIRT.mnf, 8); blob(circPts(32, 34, 12, 12, 8), SKIN.mnf, 3);
+      tube([[30, 30], [22, 16]], 7, SKIN.mnf, 6);
+      break;
+    case 'same':
+      iconBiscuit(-48, 0, 30, 4, 3); iconBiscuit(48, 0, 30, 4, 3);
+      blob(rectPts(-13, -12, 26, 8, 3), INK, 0); blob(rectPts(-13, 4, 26, 8, 3), INK, 0);
+      break;
+    case 'biggest': iconBiscuit(-14, 8, 54, 7, 5); iconBiscuit(54, 50, 13, 1, 6); star(46, -48, 20, '#ffd23f'); break;
+    case 'more':
+      [[-38, 40], [0, 40], [38, 40], [-19, 6], [19, 6], [0, -28]].forEach((p, i) => iconBiscuit(p[0], p[1], 23, 3, 20 + i));
+      blob(rectPts(40, -60, 34, 10, 3), '#3f9a45', 0); blob(rectPts(52, -72, 10, 34, 3), '#3f9a45', 0);
+      break;
+    case 'gets':
+      tube([[-70, 70], [-46, 40], [-22, 22]], 20, SHIRT.mnf, 8); blob(circPts(-16, 16, 16, 16, 10), SKIN.mnf, 4);
+      iconBiscuit(16, -12, 30, 4, 9);
+      break;
+    case 'giveBiscuit':
+      tube([[-80, 60], [-50, 34], [-24, 22]], 20, SHIRT.mnf, 8); blob(circPts(-18, 18, 16, 16, 10), SKIN.mnf, 4);
+      iconBiscuit(20, -6, 36, 12, 999); star(56, -48, 12, '#ffd23f');
+      break;
+    case 'giveChip':
+      blob(circPts(-10, 30, 26, 22, 12), SKIN.mnf, 4);
+      blob([[0, -46], [28, 8], [0, 26], [-28, 8]], '#5a3418', 4);
+      star(40, -40, 12, '#ffd23f');
+      break;
+    case 'shareTin':
+      blob(rectPts(-72, -8, 76, 44, 5), '#e0412f', 4); blob(circPts(-34, -8, 38, 10, 16), '#7a2016', 4);
+      for (let i = 0; i < 3; i++) dot(-58 + i * 24, 16, 4, '#fff6ea');
+      line([[14, 10], [50, 10]], 7); line([[38, -4], [52, 10], [38, 24]], 7);
+      miniFace('girl', 62, -32, 0.6);
+      break;
+    case 'play': blob(polyPts([[-26, -38], [42, 0], [-26, 38]], 8), '#fffdf6', 5); break;
+    case 'replay':
+      ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(0, 0, 40, -0.4, 4.6); ctx.lineWidth = 16; ctx.strokeStyle = INK; ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, 40, -0.4, 4.6); ctx.lineWidth = 9; ctx.strokeStyle = '#fffdf6'; ctx.stroke();
+      blob(polyPts([[18, -60], [42, -26], [2, -26]], 3), '#fffdf6', 4);
+      break;
+  }
+  ctx.restore();
+}
+function drawHint(x, y, dir) { // a pointing hand; fingertip bobs toward (x, y)
+  const b = Math.abs(Math.sin(T * 5)) * 16;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(dir === 'down' ? Math.PI : 0); ctx.translate(0, 12 + b);
+  blob(rectPts(-12, 0, 24, 60, 12), '#fbe3cf', 5);
+  blob(rectPts(-34, 44, 70, 62, 22), '#fbe3cf', 5);
+  line([[-18, 60], [-18, 80]], 3); line([[0, 62], [0, 82]], 3); line([[18, 60], [18, 80]], 3);
+  blob(rectPts(-30, 104, 62, 30, 8), '#4f86d6', 5);
+  ctx.restore();
+}
+function w2s(x, y) { return { x: (x - cam.x) * cam.z + W / 2, y: (y - cam.y) * cam.z + H / 2 }; }
+
+// ---------- rule cards
+const SLOT = { who: { x: 470, y: 255 }, what: { x: 900, y: 255 } };
+let cards = [];
+const SENT = {
+  'everyone-same': 'Everyone gets the same size!', 'everyone-biggest': 'Everyone gets the biggest one!', 'everyone-more': 'Everyone gets more!',
+  'me-same': 'I get the same size!', 'me-biggest': 'I get the biggest!', 'me-more': 'I get more!',
+};
+function makeCards() {
+  cards = [
+    { id: 'everyone', slot: 'who', hx: 300, hy: 612, say: 'Everyone!' },
+    { id: 'me', slot: 'who', hx: 500, hy: 612, say: 'Me!' },
+    { id: 'same', slot: 'what', hx: 880, hy: 612, say: 'Same size!' },
+    { id: 'biggest', slot: 'what', hx: 1110, hy: 612, say: 'The biggest!' },
+    { id: 'more', slot: 'what', hx: 1340, hy: 612, say: 'More!' },
+  ].map((c, i) => Object.assign(c, { x: c.hx, y: c.hy + 500 + i * 60, inSlot: false, sc: 1 }));
+}
+function drawCard(c) {
+  ctx.save(); ctx.translate(c.x, c.y + (c.inSlot ? 0 : Math.sin(T * 3 + c.hx) * 4));
+  ctx.rotate(c.inSlot ? 0 : (hs(c.hx) - 0.5) * 0.1); ctx.scale(c.sc, c.sc);
+  blob(rectPts(-85, -95, 170, 190, 18), '#fffdf7', 5);
+  blob(rectPts(-72, -82, 144, 164, 12), c.slot === 'who' ? '#efe3fb' : '#fff0da', 0);
+  icon(c.id, 0, 0, 1);
+  ctx.restore();
+}
+function drawBoard(withStamp) {
+  blob(rectPts(330, 130, 1000, 250, 20), '#fff7e4', 6);
+  blob(rectPts(360, 110, 90, 34, 4), 'rgba(250,240,190,0.85)', 2, 'rgba(0,0,0,0.2)');
+  blob(rectPts(1210, 110, 90, 34, 4), 'rgba(250,240,190,0.85)', 2, 'rgba(0,0,0,0.2)');
+  ctx.setLineDash([14, 10]);
+  for (const k of ['who', 'what']) blob(rectPts(SLOT[k].x - 92, SLOT[k].y - 102, 184, 204, 20), k === 'who' ? '#f5eefc' : '#fff5e6', 4, '#9b8a78');
+  ctx.setLineDash([]);
+  icon('gets', 685, 255, 1);
+  for (const c of cards) if (c.inSlot) drawCard(c);
+  if (withStamp) {
+    const ready = S.rule.who && S.rule.what, p = ready && S.stampT < 0 ? 1 + Math.sin(T * 6) * 0.06 : 1;
+    ctx.save(); ctx.translate(1180, 255); ctx.scale(p, p);
+    blob(circPts(0, 0, 78, 78), ready ? '#e0412f' : '#d2c8ba', 6);
+    blob(circPts(0, -30, 20, 20, 12), '#fffdf6', 4); blob(rectPts(-10, -14, 20, 24, 4), '#fffdf6', 4); blob(rectPts(-40, 10, 80, 26, 8), '#fffdf6', 4);
+    ctx.restore();
+  }
+  if (S.stampT >= 0 && S.stampT < 0.7) { // tick mark after stamping
+    ctx.save(); ctx.globalAlpha = Math.min(1, S.stampT * 5); line([[1130, 250], [1170, 295], [1245, 195]], 22, '#3f9a45'); ctx.restore();
+  }
+}
+
+// ---------- phases
+function setPhase(p) {
+  S.phase = p; S.pt = 0; S.idle = 0; S.gen++;
+  const k = kids;
+  if (p === 'start') { music('calm'); cam.tx = 800; cam.ty = 450; cam.tz = 1; tdesat = 0; }
+  if (p === 'deal') {
+    arm.tp = 1;
+    later(0.6, () => { tin.open = true; tin.lidP = 0; sfx.pop(); arm.tp = 0; });
+    later(1.0, () => dealTo('boy', 70, 7));
+    later(1.6, () => dealTo('girl', 40, 0));
+    later(2.0, () => { k.girl.bubble = 1; k.girl.tlook = -1; k.girl.expr = 'neutral'; });
+    later(2.4, () => dealTo('mnf', 13, 1));
+    later(3.0, () => { k.mnf.tlook = -1; k.mnf.expr = 'neutral'; });
+    later(3.4, () => { k.girl.bubble = 0; });
+    later(3.6, () => { k.mnf.tlook = 0; k.mnf.expr = 'shock'; sfx.tick(); cam.tx = 800; cam.ty = 470; cam.tz = 1.12; });
+    later(4.4, () => setPhase('unfair'));
+  }
+  if (p === 'unfair') {
+    music('tense'); tdesat = 1; cam.tx = 800; cam.ty = 470; cam.tz = 1.22;
+    k.mnf.expr = 'angry'; S.meter = 0; S.holding = false; S.burst = -1;
+  }
+  if (p === 'rule') {
+    music('calm'); tdesat = 0; cam.tx = 800; cam.ty = 450; cam.tz = 1;
+    k.mnf.tpuff = 0; k.mnf.red = 0; k.mnf.expr = 'think'; pose(k.mnf, 'chin');
+    k.boy.expr = 'neutral'; k.girl.expr = 'neutral';
+    S.rule = { who: null, what: null }; S.stampT = -1; makeCards();
+  }
+  if (p === 'chaos') startChaos();
+  if (p === 'freeze') {
+    music('off'); sfx.scratch(); tdesat = 0.5;
+    later(0.9, () => startWipe(() => { resetScene('after'); setPhase('notice'); }));
+  }
+  if (p === 'notice') {
+    music('quiet'); tdesat = 0; cam.tx = 1000; cam.ty = 420; cam.tz = 1.3;
+    k.mnf.expr = 'think'; pose(k.mnf, 'chin'); k.mnf.tlook = 1; k.boy.expr = 'neutral';
+    k.girl.expr = 'neutral'; k.girl.tlook = -0.6; S.noticed = false;
+  }
+  if (p === 'repair') { cam.tx = 900; cam.ty = 450; cam.tz = 1.1; S.choice = -1; }
+  if (p === 'joke') startJoke();
+  if (p === 'end') {
+    music('calm');
+    const key = S.rule.who + '-' + S.rule.what;
+    S.newKey = stickers.includes(key) ? null : key;
+    if (S.newKey) { stickers.push(key); saveSt(); later(0.5, () => { sfx.stamp(); sfx.sparkle(); }); }
+  }
+}
+function dealTo(o, r, chips) {
+  const b = mkB(tin.x, tin.y - 60, r, chips); b.owner = o; b.place = 'flat';
+  biscuits.push(b); sfx.whoosh();
+  flyB(b, PL[o], PLY, 0.55, 140, () => {
+    b.tflat = 1; sfx.pop();
+    if (o === 'boy') { kids.boy.expr = 'joy'; kids.boy.hop = 1; sfx.giggle(); }
+  });
+}
+
+// --- the rule plays out
+const ORDER = ['everyone-same', 'everyone-biggest', 'everyone-more', 'me-same', 'me-biggest', 'me-more'];
+const JOINS = [[], ['teddy'], ['dog'], ['fish'], ['bird'], ['ant0', 'ant1'], ['ant2', 'ant3', 'ant4'], []];
+function join(n) {
+  if (n === 'teddy' && teddy.state === 'shelf') { teddy.state = 'jump'; teddy.t = 0; teddy.sx = teddy.x; teddy.sy = teddy.y; sfx.boing(1.3); }
+  if (n === 'dog' && dog.state === 'sleep') { dog.state = 'walk'; dog.tx = 1190; sfx.woof(); }
+  if (n === 'fish') { fish.excite = 1; sfx.bubble(); }
+  if (n === 'bird' && bird.state === 'away') { bird.state = 'fly'; bird.t = 0; sfx.tweet(); }
+  if (n.startsWith('ant')) { const i = +n.slice(3); ants[i] = { x: -40 - i * 40, y: 888, tx: 110 + i * 64 }; }
+}
+function startChaos() {
+  music('chaos'); mInt = 0; cam.tx = 800; cam.ty = 450; cam.tz = 1; pinShown = true;
+  const who = S.rule.who, what = S.rule.what;
+  S.ch = { who, what, k: 0, recips: ['boy', 'mnf', 'girl'], A: 70 * 70 + 40 * 40 + 13 * 13 };
+  const m = kids.mnf; m.expr = 'happy'; pose(m, 'self');
+  const mine = biscuits.find(b => b.owner === 'mnf');
+  if (what === 'biggest' && who === 'everyone') biscuits.forEach(b => { if (b.owner) { b.place = 'stand'; b.tflat = 0; b.chips = Math.max(b.chips, 8); } });
+  if (who === 'me' && mine) {
+    if (what === 'same') { mine.place = 'stand'; mine.tflat = 0; mine.layer = 'back'; mine.chips = 9; }
+    if (what === 'biggest') { mine.owner = 'halo'; mine.place = null; mine.tflat = 0; mine.layer = 'back'; mine.chips = 9; }
+    if (what === 'more') tower = { x: 925, base: 668, n: 0, amp: 0 };
+  }
+}
+function beat(k) {
+  const ch = S.ch, m = kids.mnf, boy = kids.boy, girl = kids.girl;
+  shake = Math.max(shake, 6 + k * 2); mInt = k / 7;
+  // everyone joins in: the teddy, the dog, the fish, a bird, and ants
+  if (ch.who === 'everyone' && k < 7) { JOINS[k].forEach(n => { join(n); ch.recips.push(n); }); }
+  if (ch.who === 'me' && k === 3) join('dog');
+  const key = ch.who + '-' + ch.what;
+  if (key === 'everyone-same') {
+    if (k < 7) {
+      fx.push({ type: 'slice', t: 0, life: 0.45 }); sfx.whoosh();
+      later(0.15, () => {
+        biscuits.filter(b => b.tag === 'share' || b.owner).forEach(b => burstCrumbs(b.x, b.y, Math.min(10, 2 + b.r / 6)));
+        biscuits = biscuits.filter(b => !(b.tag === 'share' || b.owner)); sfx.crunch();
+        ch.A *= 0.78; const r = Math.max(2.5, Math.sqrt(ch.A / ch.recips.length));
+        ch.recips.forEach((n, i) => {
+          const a = anchor(n), b = mkB(800, 560, r, r < 8 ? 0 : Math.max(1, Math.round(r / 10)));
+          b.tag = 'share'; b.owner = n; if (PL[n] !== undefined) b.place = 'stand';
+          if (n === 'dog' || n.startsWith('ant')) b.layer = 'front';
+          biscuits.push(b); flyB(b, a.x, a.y - (b.place ? r * 0.55 : 0), 0.28 + i * 0.02, 90, () => sfx.pop());
+        });
+      });
+    } else { // the ants carry every last crumb away
+      ants.forEach(a => a.tx = 1800);
+      biscuits.filter(b => b.tag === 'share').forEach((b, i) => { const n = 'ant' + (i % 5); b.owner = n; b.place = null; b.layer = 'front'; const a = anchor(n); flyB(b, a.x, a.y, 0.5, 90); });
+    }
+  }
+  if (key === 'everyone-biggest') {
+    ch.recips.forEach(n => { if (!biscuits.find(b => b.owner === n)) { const a = anchor(n), b = mkB(a.x, a.y, 18, 3); b.owner = n; b.place = 'stand'; biscuits.push(b); } });
+    // each one in turn becomes "the biggest" - just a little bigger than the one before
+    const own = biscuits.filter(b => b.owner).sort((a, b) => a.tr - b.tr);
+    const mx0 = Math.max(...own.map(q => q.tr)), top = Math.min(k === 7 ? 700 : 480, mx0 * 1.3 + 10);
+    own.forEach((b, i) => later(0.16 * i, () => {
+      b.tr = lerp(Math.max(b.tr, mx0 * 1.05), top, (i + 1) / own.length); b.chips = Math.max(b.chips, 8);
+      sfx.boing(0.8 + i * 0.1); sparkles(b.x, b.y - b.r, 2);
+    }));
+  }
+  if (key === 'everyone-more') {
+    const c = k === 7 ? 8 : Math.min(6, k + 1);
+    ch.recips.forEach((n, i) => { for (let j = 0; j < c; j++) later(j * 0.09 + i * 0.03, () => spawnMore(n)); });
+  }
+  if (key === 'me-same') {
+    const seq = [
+      [70, { t: 'c', x: PL.boy, y: PLY, r: 70 }], [96, { t: 'e', x: 800, y: 660, rx: 96, ry: 30 }], [125, { t: 'r', x: 722, y: 293, w: 156, hh: 152 }],
+      [175, { t: 'r', x: 1154, y: 54, w: 322, hh: 322 }], [250, { t: 'r', x: 30, y: 130, w: 290, hh: 430 }], [340, { t: 'e', x: 800, y: 682, rx: 624, ry: 94 }],
+      [600, { t: 'r', x: 10, y: 10, w: 1580, hh: 880 }], [1150, { t: 'c', x: 1395, y: 135, r: 36 }],
+    ][k];
+    const mine = biscuits.find(b => b.owner === 'mnf');
+    fx.push({ type: 'ref', ref: seq[1], life: 1.3 });
+    later(0.35, () => { if (mine) mine.tr = seq[0]; sfx.boing(1.4 - k * 0.12); });
+    boy.tx = Math.min(PL.boy, 800 - seq[0] * 0.8 - 60); girl.tx = Math.max(PL.girl, 800 + seq[0] * 0.8 + 60);
+  }
+  if (key === 'me-biggest') {
+    const s = [1.12, 1.28, 1.48, 1.72, 2.0, 2.35, 2.7, 3.1][k], r = [28, 50, 85, 130, 190, 270, 380, 520][k];
+    m.ts = s; const mine = biscuits.find(b => b.owner === 'halo'); if (mine) mine.tr = r;
+    sfx.boing(1.5 - k * 0.13);
+    boy.tx = Math.min(PL.boy, 800 - 120 * s - 120); girl.tx = Math.max(PL.girl, 800 + 120 * s + 120);
+    if (600 - 335 * s < 40) later(0.3, () => { sfx.bonk(); shake = 22; sparkles(800, 40, 4); });
+  }
+  if (key === 'me-more') {
+    if (k < 7) {
+      const c = [2, 3, 4, 6, 8, 10, 12][k];
+      for (let i = 0; i < c; i++) later(i * 0.06, () => { tower.n++; sfx.tick(); });
+      tower.amp = 0.004 + k * 0.012;
+    } else { // topple!
+      for (let i = 0; i < tower.n; i++) {
+        const hgt = i * 19, b = mkB(tower.x + Math.sin(tower.amp) * hgt, tower.base - hgt, 26 + Math.random() * 10, 3);
+        b.mode = 'fall'; b.vx = (Math.random() - 0.3) * 700; b.vy = -Math.random() * 300; b.spin = (Math.random() - 0.5) * 8; b.layer = 'front'; b.noTable = Math.random() < 0.5;
+        biscuits.push(b);
+      }
+      tower.n = 0; sfx.crash(); shake = 30;
+    }
+  }
+  // reactions
+  if (k === 0) { m.expr = 'happy'; pose(m, 'self'); boy.expr = ch.who === 'me' ? 'shock' : 'neutral'; }
+  if (k === 2) { m.expr = 'think'; pose(m, 'chin'); boy.expr = ch.what === 'same' ? 'sad' : ch.what === 'more' ? 'joy' : 'shock'; girl.expr = 'think'; }
+  if (k === 4) { m.expr = 'sad'; pose(m, 'rest'); girl.expr = 'shock'; }
+  if (k >= 5) { m.expr = 'shock'; pose(m, 'up'); m.shake = 0.5; boy.expr = 'shock'; }
+  if (k === 7) { teddy.bounce = 1; fish.excite = 1; }
+}
+function spawnMore(n) {
+  if (biscuits.length > 320) return;
+  const a = anchor(n), b = mkB(tin.x, tin.y - 70, 15 + Math.random() * 14);
+  const Tf = 0.55 + Math.random() * 0.3, tx = a.x + (Math.random() - 0.5) * 90, ty = a.y - 10;
+  b.vx = (tx - b.x) / Tf; b.vy = (ty - b.y) / Tf - 0.5 * 2000 * Tf; b.mode = 'fall'; b.layer = 'front';
+  b.spin = (Math.random() - 0.5) * 10; b.noTable = n === 'dog' || n.startsWith('ant');
+  biscuits.push(b); tin.shake = 1; sfx.pop();
+}
+function physB(b, dt) {
+  const py = b.y;
+  b.vy += 2000 * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.rot += b.spin * dt;
+  if (b.x < 10) { b.x = 10; b.vx = Math.abs(b.vx) * 0.4; }
+  if (b.x > W - 10) { b.x = W - 10; b.vx = -Math.abs(b.vx) * 0.4; }
+  if (b.vy <= 0) return;
+  const i = clamp(Math.floor(b.x / 40), 0, 39), rr = b.r * 0.55;
+  if (!b.noTable && b.x > 200 && b.x < 1400 && hmT[i] < 330) {
+    const s = 660 - hmT[i];
+    if (py + rr <= s + 4 && b.y + rr >= s) { land(b, hmT, i, s); b.layer = 'table'; return; }
+  }
+  const f = 896 - hmF[i];
+  if (b.y + rr >= f) { land(b, hmF, i, f); b.layer = 'front'; }
+}
+function land(b, hm, i, s) {
+  b.y = s - b.r * 0.55; b.mode = 'pile'; b.vx = b.vy = 0; b.spin = 0;
+  const add = b.r * 0.8; hm[i] += add; if (i > 0) hm[i - 1] += add * 0.4; if (i < 39) hm[i + 1] += add * 0.4;
+}
+
+// --- noticing, repair, final joke
+function notice() {
+  S.noticed = true; const g = kids.girl;
+  g.bubble = 1; g.expr = 'happy'; g.tlook = 0; g.glow = 0; g.talk = 1.2;
+  say('Chocolate chips!', { pitch: 1.8, rate: 0.95 }); sfx.sparkle();
+  later(1.3, () => { kids.mnf.expr = 'notice'; kids.mnf.tlook = 1; });
+  later(3.4, () => setPhase('repair'));
+}
+const CHOICES = [{ id: 'giveBiscuit', x: 560 }, { id: 'giveChip', x: 800 }, { id: 'shareTin', x: 1040 }];
+function doRepair(i) {
+  S.choice = i; const m = kids.mnf, g = kids.girl; sfx.pop();
+  const receive = (b, word) => {
+    pose(g, 'holdUpL'); b.owner = 'hand:girl:L'; b.place = null;
+    const a = anchor(b.owner); flyB(b, a.x, a.y, 0.4, 40, () => {
+      g.expr = 'joy'; g.bubble = 0; g.hop = 1; g.talk = 1; sfx.sparkle(); sparkles(a.x, a.y, 5); say(word, { pitch: 1.8 });
+    });
+  };
+  if (i === 0) { // he takes the chippiest biscuit from the tin and offers it
+    pose(m, 'reachTin'); m.expr = 'think';
+    later(0.5, () => {
+      const b = mkB(tin.x, tin.y - 60, 34, 14); b.id = 999; biscuits.push(b); sfx.pop();
+      pose(m, 'offerR'); flyB(b, 800 + 205, 600 - 110, 0.5, 60, () => { b.owner = 'hand:mnf:R'; });
+      later(1.1, () => { pose(g, 'reachL'); });
+      later(1.4, () => { receive(b, 'Thank you!'); pose(m, 'rest'); });
+    });
+  } else if (i === 1) { // he gives her the one chip from his own tiny biscuit
+    const mine = biscuits.find(b => b.owner === 'mnf'); if (mine) mine.chips = 0;
+    const c = mkB(800, PLY - 4, 11, 0); c.isChip = true; biscuits.push(c);
+    pose(m, 'offerR'); m.expr = 'think';
+    flyB(c, 1005, 490, 0.5, 60, () => { c.owner = 'hand:mnf:R'; });
+    later(1.0, () => pose(g, 'reachL'));
+    later(1.3, () => { receive(c, 'Yay!'); pose(m, 'rest'); });
+  } else { // he slides the whole tin over so she can choose
+    pose(m, 'offerR'); tin.tx = 1000; sfx.whoosh(); m.expr = 'think';
+    later(0.9, () => { pose(g, 'reachL'); pose(m, 'rest'); });
+    later(1.4, () => { const b = mkB(tin.x, tin.y - 60, 34, 14); b.id = 999; biscuits.push(b); receive(b, 'Yay!'); });
+  }
+  later(2.6, () => { m.expr = 'neutral'; m.tlook = 0; m.hop = 0.5; });
+  later(3.8, () => setPhase('joke'));
+}
+function startJoke() {
+  cam.tx = 800; cam.ty = 450; cam.tz = 1;
+  const boyB = biscuits.find(b => b.owner === 'boy'), m = kids.mnf, boy = kids.boy;
+  if (dog.state === 'sleep') { dog.state = 'sit'; }
+  sfx.woof();
+  later(0.4, () => { dog.state = 'leap'; dog.t = 0; dog.sx = dog.x; dog.sy = dog.y; dog.ex = PL.boy + 40; dog.ey = 700; dog.dir = -1; sfx.boing(); });
+  later(1.0, () => { if (boyB) { burstCrumbs(boyB.x, boyB.y, 14); biscuits = biscuits.filter(b => b !== boyB); } sfx.crunch(); sfx.gulp(); dog.chew = 2.5; boy.expr = 'shock'; boy.shake = 0.5; });
+  later(1.3, () => { dog.state = 'leap'; dog.t = 0; dog.sx = dog.x; dog.sy = dog.y; dog.ex = 620; dog.ey = 872; });
+  later(1.8, () => { boy.expr = 'sad'; boy.shake = 0; });
+  later(2.2, () => {
+    m.expr = 'angry'; pose(m, 'up'); m.hop = 1; m.shake = 0.6; shake = 18; m.talk = 1.3;
+    burstLines(800, 380); S.burst = 0; say("That's not fair!", { pitch: 1.6, rate: 1.05 }); sfx.crash();
+  });
+  later(3.6, () => { m.shake = 0; });
+  later(4.6, () => { m.expr = 'think'; pose(m, 'rest'); m.tlook = 0; });
+  later(5.6, () => startWipe(() => setPhase('end')));
+}
+
+// ---------- stickers (saved in this browser only)
+let stickers = [];
+try { stickers = JSON.parse(localStorage.getItem('mnf-biscuit-stickers') || '[]'); } catch (e) { stickers = []; }
+function saveSt() { try { localStorage.setItem('mnf-biscuit-stickers', JSON.stringify(stickers)); } catch (e) {} }
+
+// ---------- scribble wipe between scenes
+function startWipe(mid) {
+  wipe = { t: 0, mid, did: false, st: Array.from({ length: 21 }, (_, i) => ({ y: i * 46 - 10, c: ['#f6b820', '#e0412f', '#4f86d6', '#5aab4d', '#9a74d6', '#f68a2b'][i % 6] })) };
+  sfx.scribble();
+}
+function drawWipe() {
+  if (!wipe) return;
+  const p = wipe.t, n = wipe.st.length;
+  const a = p < 0.5 ? 0 : Math.floor((p - 0.5) / 0.5 * n), b = p < 0.5 ? Math.ceil(p / 0.5 * n) : n;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (let i = a; i < b; i++) {
+    const s = wipe.st[i]; ctx.beginPath();
+    for (let x = -80, j = 0; x <= W + 80; x += 80, j++) { const y = s.y + (j % 2 ? 34 : -34); j ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.strokeStyle = s.c; ctx.lineWidth = 84; ctx.stroke();
+  }
+}
+
+// ---------- title and end screens
+let titleKid = null;
+function drawPaper() {
+  ctx.fillStyle = '#f6ead0'; ctx.fillRect(0, 0, W, H);
+  const cs = ['#f6b820', '#e0412f', '#4f86d6', '#5aab4d', '#9a74d6'];
+  for (let i = 0; i < 26; i++) dot(hs(i) * W, hs(i + 40) * H, 10 + hs(i + 80) * 14, cs[i % 5] + '55');
+}
+function drawSuitcase(x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  blob(rectPts(-30, -150, 16, 70, 4), '#3a3230', 4); blob(rectPts(30, -150, 16, 70, 4), '#3a3230', 4); blob(rectPts(-30, -160, 76, 18, 6), '#3a3230', 4);
+  blob(rectPts(-80, -90, 190, 240, 22), '#e0412f', 6);
+  for (let i = 0; i < 4; i++) line([[-40 + i * 40, -70], [-40 + i * 40, 130]], 4, 'rgba(90,20,15,0.6)');
+  blob(circPts(-50, 160, 16, 16), '#3a3230', 4); blob(circPts(80, 160, 16, 16), '#3a3230', 4);
+  ctx.restore();
+}
+function drawTitle() {
+  drawPaper();
+  if (!titleKid) { titleKid = mkKid('mnf', 430); titleKid.y = 610; }
+  const k = titleKid, ph = Math.floor(T / 2.6) % 2;
+  k.expr = ph ? 'angry' : 'happy'; pose(k, ph ? 'up' : 'rest');
+  drawKid(k, true);
+  drawSuitcase(720, 690, 0.95);
+  const txt = 'Mr Not Fair', cols = ['#e0412f', '#4f86d6', '#f6b820', '#5aab4d', '#9a74d6', '#f68a2b'];
+  ctx.font = '150px ' + FONT; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+  let x = 1160 - ctx.measureText(txt).width / 2;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i], w = ctx.measureText(ch).width;
+    ctx.save(); ctx.translate(x + w / 2, 250 + Math.sin(T * 3 + i) * 6); ctx.rotate((hs(i + 3) - 0.5) * 0.25);
+    ctx.lineWidth = 16; ctx.strokeStyle = INK; ctx.lineJoin = 'round'; ctx.strokeText(ch, 0, 0); ctx.fillStyle = cols[i % 6]; ctx.fillText(ch, 0, 0);
+    ctx.restore(); x += w;
+  }
+  ctx.save(); ctx.translate(1160, 420); ctx.scale(1.3, 1.3);
+  blob(rectPts(-62, -58, 124, 58, 5), '#e0412f', 5); blob(circPts(0, -58, 62, 16, 22), '#7a2016', 5);
+  iconBiscuit(-20, -76, 26, 4, 11); iconBiscuit(24, -70, 20, 3, 12);
+  ctx.restore();
+  const p = 1 + Math.sin(T * 4) * 0.05;
+  ctx.save(); ctx.translate(1160, 640); ctx.scale(p, p);
+  blob(circPts(0, 0, 110, 110), '#5aab4d', 7); icon('play', 8, 0, 1.4);
+  ctx.restore();
+}
+function drawEnd() {
+  drawPaper();
+  blob(polyPts([[430, 110], [1170, 110], [1205, 300], [395, 300]], 30), '#c8352a', 6);
+  blob(polyPts([[460, 140], [1140, 140], [1165, 286], [435, 286]], 24), '#eba898', 4);
+  blob(rectPts(380, 300, 840, 480, 36), '#e0412f', 6);
+  blob(rectPts(420, 330, 760, 420, 26), '#f7dcc8', 4);
+  blob(circPts(460, 800, 20, 20), '#3a3230', 4); blob(circPts(1140, 800, 20, 20), '#3a3230', 4);
+  ORDER.forEach((key, i) => {
+    const x = 540 + (i % 3) * 260, y = 440 + Math.floor(i / 3) * 200;
+    const got = stickers.includes(key), [who, what] = key.split('-');
+    let s = 1;
+    if (key === S.newKey) { const u = (S.pt - 0.3) / 0.35; if (u < 0) return; s = lerp(2.4, 1, back(u)); }
+    ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+    if (!got) { ctx.setLineDash([10, 10]); blob(circPts(0, 0, 84, 84), 'rgba(255,255,255,0.35)', 4, '#b99c88'); ctx.setLineDash([]); ctx.globalAlpha = 0.18; }
+    else blob(circPts(0, 0, 86, 86), '#fffdf6', 6);
+    if (got) blob(circPts(0, 0, 72, 72), who === 'me' ? '#fff2cc' : '#efe3fb', 0);
+    icon(who, -34, 4, 0.56); icon(what, 38, 4, 0.56);
+    ctx.restore();
+  });
+  const k = titleKid || mkKid('mnf', 190); titleKid = k;
+  k.x = 190; k.y = 610; k.s = 0.85; k.expr = 'happy'; pose(k, 'cheer');
+  drawKid(k, true);
+  const p = 1 + Math.sin(T * 4) * 0.05;
+  ctx.save(); ctx.translate(1420, 760); ctx.scale(p, p);
+  blob(circPts(0, 0, 88, 88), '#5aab4d', 7); icon('replay', 0, 4, 1);
+  ctx.restore();
+}
+
+// ---------- update
+function update(dt) {
+  S.pt += dt; S.idle += dt;
+  const run = timers.slice(); timers = [];
+  for (const t of run) { if (t.gen !== S.gen) continue; t.t -= dt; if (t.t <= 0) t.fn(); else timers.push(t); }
+  const cf = Math.min(1, dt * 3);
+  cam.x += (cam.tx - cam.x) * cf; cam.y += (cam.ty - cam.y) * cf; cam.z += (cam.tz - cam.z) * cf;
+  shake = Math.max(0, shake - dt * 40); desat += (tdesat - desat) * Math.min(1, dt * 4);
+  arm.p += (arm.tp - arm.p) * Math.min(1, dt * 6);
+  if (tin.open && tin.lidP < 1) tin.lidP = Math.min(1, tin.lidP + dt * 2.5);
+  tin.shake = Math.max(0, tin.shake - dt * 3); tin.x += (tin.tx - tin.x) * Math.min(1, dt * 4);
+  const f = Math.min(1, dt * 10);
+  for (const k of Object.values(kids)) {
+    for (const sd of ['L', 'R']) for (const i of [0, 1]) k.hands[sd][i] += (k.th[sd][i] - k.hands[sd][i]) * f;
+    k.look += (k.tlook - k.look) * f; k.s += (k.ts - k.s) * Math.min(1, dt * 6); k.x += (k.tx - k.x) * Math.min(1, dt * 5);
+    k.hop = Math.max(0, k.hop - dt * 2.5); k.talk = Math.max(0, k.talk - dt); k.puff += (k.tpuff - k.puff) * f;
+    k.bub += (k.bubble - k.bub) * Math.min(1, dt * 6);
+    if (S.phase !== 'unfair') k.shake = Math.max(0, k.shake - dt * 0.8);
+  }
+  // actors
+  teddy.bounce = Math.max(0, teddy.bounce - dt * 2.5);
+  if (teddy.state === 'jump') {
+    teddy.t += dt / 0.8; const u = Math.min(1, teddy.t);
+    teddy.x = lerp(teddy.sx, 215, u); teddy.y = lerp(teddy.sy, 668, u) - Math.sin(u * Math.PI) * 170;
+    if (u >= 1) { teddy.state = 'table'; sfx.squeak(); }
+  }
+  if (dog.state === 'walk') { const d = dog.tx - dog.x; dog.dir = d < 0 ? -1 : 1; dog.x += Math.sign(d) * Math.min(Math.abs(d), 360 * dt); if (Math.abs(d) < 2) { dog.state = 'sit'; dog.dir = -1; } }
+  if (dog.state === 'leap') {
+    dog.t += dt / 0.5; const u = Math.min(1, dog.t);
+    dog.x = lerp(dog.sx, dog.ex, u); dog.y = lerp(dog.sy, dog.ey, u) - Math.sin(u * Math.PI) * 180;
+    if (u >= 1) dog.state = 'sit';
+  }
+  dog.chew = Math.max(0, dog.chew - dt);
+  if (bird.state === 'fly') {
+    bird.t += dt / 1.2; const u = Math.min(1, bird.t);
+    bird.x = lerp(1700, 1290, ease(u)); bird.y = lerp(40, 358, ease(u)) - Math.sin(u * Math.PI) * 60;
+    if (u >= 1) bird.state = 'sit';
+  }
+  fish.excite = Math.max(0, fish.excite - dt * 0.6);
+  for (const a of ants) { if (!a) continue; const d = a.tx - a.x; a.x += Math.sign(d) * Math.min(Math.abs(d), 110 * dt); }
+  // biscuits
+  const frozen = S.phase === 'freeze';
+  for (const b of biscuits) {
+    if (frozen) continue;
+    b.r += (b.tr - b.r) * Math.min(1, dt * 7);
+    b.flat += (b.tflat - b.flat) * f;
+    if (b.mode === 'fly') {
+      b.ft += dt; const u = Math.min(1, b.ft / b.fd), e = ease(u);
+      b.x = lerp(b.sx, b.fx, e); b.y = lerp(b.sy, b.fy, e) - Math.sin(u * Math.PI) * b.arc;
+      if (u >= 1) { b.mode = 'rest'; if (b.after) { const fn = b.after; b.after = null; fn(b); } }
+    } else if (b.mode === 'fall') physB(b, dt);
+    else if (b.mode === 'rest' && b.owner) {
+      const a = anchor(b.owner);
+      if (a) { b.x = a.x + b.ox; b.y = a.y + b.oy - (b.place === 'stand' ? b.r * 0.55 : 0); }
+    }
+  }
+  if (!frozen) updateFx(dt);
+  phaseUpdate(dt);
+  if (wipe) { wipe.t += dt / 1.0; if (wipe.t >= 0.5 && !wipe.did) { wipe.did = true; wipe.mid && wipe.mid(); } if (wipe.t >= 1) wipe = null; }
+}
+function phaseUpdate(dt) {
+  const m = kids.mnf;
+  if (S.phase === 'unfair') {
+    if (S.burst < 0) {
+      if (S.holding) S.meter += dt / 1.2; else S.meter = Math.max(0, S.meter - dt * 0.45);
+      m.tpuff = S.meter; m.red = S.meter; m.shake = S.meter * 0.7; shake = Math.max(shake, S.meter * 7);
+      rumble(S.holding ? S.meter : 0);
+      if (S.meter >= 1) {
+        S.burst = 0; S.holding = false; stopRumble(); sfx.crash(); music('off');
+        say("That's not fair!", { pitch: 1.6, rate: 1.05 }); m.talk = 1.4;
+        pose(m, 'up'); m.hop = 1; m.tpuff = 0.4; shake = 30; tdesat = 0; burstLines(800, 380);
+        kids.boy.expr = 'shock'; kids.girl.expr = 'shock'; teddy.bounce = 1; fish.excite = 1;
+        later(2.6, () => setPhase('rule'));
+      }
+    } else { S.burst += dt; m.red = Math.max(0, m.red - dt * 0.4); m.shake = Math.max(0, m.shake - dt); }
+  }
+  if (S.burst >= 0 && S.phase === 'joke') S.burst += dt;
+  if (S.phase === 'rule') {
+    for (const c of cards) {
+      const t = c.inSlot ? SLOT[c.slot] : { x: c.hx, y: c.hy };
+      c.x += (t.x - c.x) * Math.min(1, dt * 10); c.y += (t.y - c.y) * Math.min(1, dt * 10); c.sc += (1 - c.sc) * Math.min(1, dt * 6);
+    }
+    if (S.stampT >= 0) { S.stampT += dt; if (S.stampT >= 1.3) setPhase('chaos'); }
+  }
+  if (S.phase === 'chaos') {
+    const ch = S.ch;
+    while (ch.k <= 7 && S.pt >= 0.5 + ch.k * 1.55) { beat(ch.k); ch.k++; }
+    if (S.pt >= 0.5 + 7 * 1.55 + 2.2) setPhase('freeze');
+  }
+  if (S.phase === 'notice') kids.girl.glow = S.noticed ? 0 : 0.6 + Math.sin(T * 3) * 0.4;
+  if (S.phase === 'title' || S.phase === 'end') {
+    if (titleKid) { const k = titleKid; for (const sd of ['L', 'R']) for (const i of [0, 1]) k.hands[sd][i] += (k.th[sd][i] - k.hands[sd][i]) * Math.min(1, dt * 8); }
+  }
+}
+
+// ---------- draw
+function drawBurst(size, y) {
+  const t = S.burst; if (t < 0 || t > 2.6) return;
+  const txt = "THAT'S NOT FAIR!", cols = ['#e0412f', '#4f86d6', '#f6b820', '#5aab4d'];
+  ctx.save(); ctx.globalAlpha = t > 2.1 ? Math.max(0, 1 - (t - 2.1) / 0.5) : 1;
+  ctx.font = size + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  let x = W / 2 - ctx.measureText(txt).width / 2;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i], w = ctx.measureText(ch).width, u = (t - i * 0.03) / 0.25;
+    if (u > 0) {
+      ctx.save(); ctx.translate(x + w / 2, y + Math.sin(T * 9 + i) * 5); ctx.rotate((hs(i) - 0.5) * 0.35); const s = back(u); ctx.scale(s, s);
+      ctx.lineWidth = size * 0.13; ctx.strokeStyle = INK; ctx.lineJoin = 'round'; ctx.strokeText(ch, 0, 0);
+      ctx.fillStyle = cols[i % 4]; ctx.fillText(ch, 0, 0); ctx.restore();
+    }
+    x += w;
+  }
+  ctx.restore();
+}
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#2b211c'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offX * dpr, offY * dpr);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+  sc = 0;
+  const ph = S.phase;
+  if (ph === 'title') drawTitle();
+  else if (ph === 'end') drawEnd();
+  else {
+    const sx = shake ? (Math.random() - 0.5) * shake : 0, sy = shake ? (Math.random() - 0.5) * shake : 0;
+    const camT = () => { ctx.translate(W / 2 + sx, H / 2 + sy); ctx.scale(cam.z, cam.z); ctx.translate(-cam.x, -cam.y); };
+    ctx.save(); camT(); drawWorld(); ctx.restore();
+    if (desat > 0.02) {
+      ctx.save(); ctx.globalCompositeOperation = 'saturation'; ctx.fillStyle = 'rgba(128,128,128,' + desat + ')'; ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = 'rgba(215,205,195,' + desat + ')'; ctx.fillRect(0, 0, W, H); ctx.restore();
+      if (ph === 'unfair' || ph === 'deal') { // keep the feeling in colour: him and the biscuits
+        ctx.save(); camT();
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, 596); ctx.clip(); drawKid(kids.mnf); ctx.restore();
+        drawPlate(PL.boy); drawPlate(PL.mnf); drawPlate(PL.girl);
+        for (const b of biscuits) if (b.owner) drawBiscuit(b);
+        drawFx(); ctx.restore();
+      }
+    }
+    phaseUI();
+  }
+  drawWipe();
+  ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = grainPat; ctx.fillRect(0, 0, W, H);
+  const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.45, W / 2, H / 2, H * 1.05); vg.addColorStop(0, 'rgba(255,255,255,0)'); vg.addColorStop(1, 'rgba(150,110,70,0.35)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H); ctx.restore();
+  // sound toggle
+  ctx.save(); ctx.translate(1540, 60); blob(circPts(0, 0, 38, 38), '#fffdf6', 5);
+  blob(polyPts([[-20, -8], [-8, -8], [8, -22], [8, 22], [-8, 8], [-20, 8]], 3), INK, 0);
+  if (muted) { line([[16, -12], [32, 12]], 5, '#e0412f'); line([[32, -12], [16, 12]], 5, '#e0412f'); }
+  else { ctx.beginPath(); ctx.arc(10, 0, 14, -0.8, 0.8); ctx.lineWidth = 4; ctx.strokeStyle = INK; ctx.stroke(); ctx.beginPath(); ctx.arc(10, 0, 24, -0.8, 0.8); ctx.stroke(); }
+  ctx.restore();
+  ctx.restore();
+}
+function phaseUI() {
+  const ph = S.phase;
+  if (ph === 'start' && S.idle > 1.2) { const p = w2s(tin.x, tin.y - 40); drawHint(p.x + 10, p.y + 30, 'up'); }
+  if (ph === 'unfair') {
+    if (S.burst < 0) {
+      const p = S.holding ? 0.94 : 1 + Math.sin(T * 5) * 0.05;
+      ctx.save(); ctx.translate(800, 780); ctx.scale(p, p);
+      blob(circPts(0, 0, 98, 98), '#fffdf6', 6);
+      ctx.beginPath(); ctx.arc(0, 0, 84, -Math.PI / 2, -Math.PI / 2 + S.meter * 6.2832); ctx.lineWidth = 22; ctx.strokeStyle = '#e0412f'; ctx.lineCap = 'round'; if (S.meter > 0.01) ctx.stroke();
+      blob(circPts(0, 0, 62, 62), '#f6b820', 4);
+      ctx.save(); ctx.scale(1.15, 1.15); miniFace('mnf', 0, 6, 1);
+      line([[-24, -8], [-6, -2]], 4); line([[24, -8], [6, -2]], 4);
+      ctx.restore();
+      ctx.restore();
+      if (S.idle > 1.0 && !S.holding && S.meter < 0.2) drawHint(800, 670, 'down');
+    }
+    drawBurst(120, 130);
+  }
+  if (ph === 'joke') drawBurst(96, 110);
+  if (ph === 'rule') {
+    const u = S.stampT > 0.6 ? ease((S.stampT - 0.6) / 0.6) : 0;
+    ctx.fillStyle = 'rgba(40,28,20,' + (0.35 * (1 - u)) + ')'; ctx.fillRect(0, 0, W, H);
+    ctx.save(); ctx.translate(0, (1 - ease(S.pt / 0.5)) * -500);
+    ctx.translate(lerp(0, -115, u), lerp(0, -35, u)); ctx.scale(lerp(1, 0.38, u), lerp(1, 0.38, u));
+    drawBoard(true); ctx.restore();
+    ctx.save(); ctx.translate(0, u * 500);
+    blob(rectPts(170, 490, 460, 244, 24), '#e8dcf3', 5); blob(rectPts(760, 490, 700, 244, 24), '#fbe2c2', 5);
+    for (const c of cards) if (!c.inSlot) drawCard(c);
+    ctx.restore();
+    if (S.stampT < 0 && S.idle > 1.5) {
+      if (!S.rule.who) drawHint(300, 690, 'up');
+      else if (!S.rule.what) drawHint(1110, 690, 'up');
+      else drawHint(1180, 345, 'up');
+    }
+  }
+  if (ph === 'chaos' || ph === 'freeze') {
+    if (pinShown) { ctx.save(); ctx.translate(-115, -35); ctx.scale(0.38, 0.38); drawBoard(false); ctx.restore(); }
+  }
+  if (ph === 'notice' && !S.noticed && S.idle > 1.5) { const p = w2s(kids.girl.x - 70, kids.girl.y - 170); drawHint(p.x - 90, p.y, 'up'); }
+  if (ph === 'repair' && S.choice < 0) {
+    CHOICES.forEach((c, i) => {
+      const u = back((S.pt - i * 0.12) / 0.4); if (u <= 0) return;
+      ctx.save(); ctx.translate(c.x, 790 + Math.sin(T * 3 + i) * 5); ctx.scale(u, u);
+      blob(circPts(0, 0, 86, 86), '#fffdf6', 6); icon(c.id, 0, 4, 0.95);
+      ctx.restore();
+    });
+    if (S.idle > 2.5) drawHint(800, 690, 'down');
+  }
+}
+
+// ---------- input
+let holdingKey = false;
+function toLogical(e) { return { x: (e.clientX - offX) / scale, y: (e.clientY - offY) / scale }; }
+function toWorld(p) { return { x: (p.x - W / 2) / cam.z + cam.x, y: (p.y - H / 2) / cam.z + cam.y }; }
+function pokeToys(w) {
+  const d = (x, y) => Math.hypot(w.x - x, w.y - y);
+  if (d(teddy.x, teddy.y - 70) < 70) { teddy.bounce = 1; sfx.squeak(); return true; }
+  if (d(fish.x, fish.y) < 60) { fish.excite = 1; sfx.bubble(); return true; }
+  if (d(dog.x, dog.y - 60) < 90) { if (dog.state === 'sleep') dog.state = 'sit'; sfx.woof(); return true; }
+  if (bird.state === 'sit' && d(bird.x, bird.y - 25) < 45) { sfx.tweet(); return true; }
+  for (const k of Object.values(kids)) {
+    if (d(k.x, k.y - 230 * k.s) < 85 * k.s) { k.hop = 1; if (k.kind === 'mnf') sfx.boing(1.6); else sfx.giggle(); return true; }
+  }
+  return false;
+}
+function down(p) {
+  S.idle = 0;
+  if (Math.hypot(p.x - 1540, p.y - 60) < 46) {
+    muted = !muted; if (master) master.gain.value = muted ? 0 : 0.7;
+    try { if (muted && window.speechSynthesis) speechSynthesis.cancel(); } catch (e) {}
+    return;
+  }
+  if (wipe) return;
+  const ph = S.phase, w = toWorld(p);
+  if (ph === 'title') { sfx.pop(); startWipe(() => { resetScene('fresh'); setPhase('start'); }); return; }
+  if (ph === 'end') {
+    if (Math.hypot(p.x - 1420, p.y - 760) < 100) { sfx.pop(); startWipe(() => { resetScene('fresh'); setPhase('start'); }); }
+    return;
+  }
+  if (ph === 'start') {
+    if (Math.hypot(w.x - tin.x, w.y - (tin.y - 40)) < 95) { setPhase('deal'); return; }
+    pokeToys(w); return;
+  }
+  if (ph === 'unfair') { if (S.burst < 0) { S.holding = true; S.meter = Math.min(1, S.meter + 0.08); } return; }
+  if (ph === 'rule') {
+    if (S.stampT >= 0 || S.pt < 0.4) return;
+    if (S.rule.who && S.rule.what && Math.hypot(p.x - 1180, p.y - 255) < 90) {
+      S.stampT = 0; sfx.stamp(); shake = 10;
+      const key = S.rule.who + '-' + S.rule.what; say(SENT[key], { pitch: 1.5 });
+      kids.mnf.talk = 1.6; kids.mnf.expr = 'happy'; pose(kids.mnf, 'self');
+      return;
+    }
+    for (const c of cards.slice().sort((a, b) => b.inSlot - a.inSlot)) {
+      if (Math.abs(p.x - c.x) < 88 && Math.abs(p.y - c.y) < 98) {
+        if (c.inSlot) { c.inSlot = false; S.rule[c.slot] = null; sfx.pop(); return; }
+        cards.forEach(o => { if (o.inSlot && o.slot === c.slot) o.inSlot = false; });
+        c.inSlot = true; c.sc = 1.2; S.rule[c.slot] = c.id; sfx.pop(); say(c.say, { pitch: 1.5 }); kids.mnf.talk = 0.8;
+        return;
+      }
+    }
+    return;
+  }
+  if (ph === 'chaos') {
+    const b = biscuits.find(b => Math.hypot(w.x - b.x, w.y - b.y) < b.r + 12 && b.r < 200);
+    if (b) { sfx.crunch(); burstCrumbs(b.x, b.y, 6); if (b.mode === 'pile' || b.mode === 'rest') { b.oy = 0; } return; }
+    pokeToys(w); return;
+  }
+  if (ph === 'notice') {
+    const g = kids.girl;
+    if (!S.noticed && Math.hypot(w.x - g.x, w.y - (g.y - 160)) < 150) { notice(); return; }
+    pokeToys(w); return;
+  }
+  if (ph === 'repair') {
+    if (S.choice >= 0) { pokeToys(w); return; }
+    CHOICES.forEach((c, i) => { if (S.choice < 0 && Math.hypot(p.x - c.x, p.y - 790) < 92) doRepair(i); });
+    return;
+  }
+  pokeToys(w);
+}
+function up() { if (S.phase === 'unfair' && !holdingKey) S.holding = false; }
+cv.addEventListener('pointerdown', e => { e.preventDefault(); initAudio(); down(toLogical(e)); });
+addEventListener('pointerup', up); addEventListener('pointercancel', up);
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.code === 'Space' || e.code === 'Enter') { initAudio(); if (S.phase === 'unfair') { holdingKey = true; S.holding = true; S.idle = 0; } else if (S.phase === 'title') down({ x: 1160, y: 640 }); }
+  if (e.code === 'KeyM') down({ x: 1540, y: 60 });
+});
+addEventListener('keyup', e => { if (e.code === 'Space' || e.code === 'Enter') { holdingKey = false; up(); } });
+
+// ---------- go
+resetScene('fresh');
+let last = performance.now();
+function frame(nowMs) {
+  const dt = Math.min(0.05, (nowMs - last) / 1000); last = nowMs; T += dt;
+  boil = Math.floor(T * 8) % 3;
+  update(dt); draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+// debug hooks for automated playtesting
+window.__mnf = { S, kids, get biscuits() { return biscuits; }, setPhase, resetScene, down, up, notice, doRepair };
+</script>
+</body>
+</html>

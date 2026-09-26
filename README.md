@@ -1,5 +1,7 @@
 # Gumleaf Dash
 
+> **New:** [`mr-not-fair/`](mr-not-fair/) has *Mr. Not Fair: The Biscuit Tin*, the first episode of a no-reading series for ages 4–7.
+
 A 3D endless runner across Australia. You play a kangaroo (or a quokka or koala, once unlocked) hopping through four stages that loop and keep getting faster:
 
 1. **Red Desert** at golden hour: mesas, spinifex, windmills, hot-air balloons
